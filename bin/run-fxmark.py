@@ -25,9 +25,9 @@ def catch_ctrl_C(sig, frame):
 class Runner(object):
     # media path
     LOOPDEV = "/dev/loopX"
-    NVMEDEV = "/dev/nvme0n1pX"
-    HDDDEV  = "/dev/sdX"
-    SSDDEV  = "/dev/sdY"
+    NVMEDEV = "/dev/nvme0n1"
+    HDDDEV = "/dev/sdX"
+    SSDDEV = "/dev/sdY"
 
     # test core granularity
     CORE_FINE_GRAIN   = 0
@@ -46,54 +46,53 @@ class Runner(object):
 
         # bench config
         self.DISK_SIZE     = "32G"
-        self.DURATION      = 30 # seconds
+        self.DURATION = 5  # seconds
         self.DIRECTIOS     = ["bufferedio", "directio"]  # enable directio except tmpfs -> nodirectio 
-        self.MEDIA_TYPES   = ["ssd", "hdd", "nvme", "mem"]
-#        self.FS_TYPES      = [
-        self.FS_TYPES      = ["tmpfs",
-                              "ext4", "ext4_no_jnl",
-                              "xfs",
-                              "btrfs", "f2fs",
-                              # "jfs", "reiserfs", "ext2", "ext3",
+        self.MEDIA_TYPES = ["ssd", "hdd", "nvme", "mem"]
+        #        self.FS_TYPES      = [
+        self.FS_TYPES = [
+            "tmpfs",
+            "ext4",
+            "ext4_no_jnl",
+            "xfs",
+            "btrfs",
+            "f2fs",
+            "jfs", "reiserfs", "ext2", "ext3",
         ]
-        self.BENCH_TYPES   = [
+        self.BENCH_TYPES = [
             # write/write
             "DWAL",
             "DWOL",
             "DWOM",
             "DWSL",
-            "MWRL",
-            "MWRM",
+            # "MWRL",
+            # "MWRM",
             "MWCL",
             "MWCM",
-            "MWUM",
-            "MWUL",
+            # "MWUM",
+            # "MWUL",
             "DWTL",
-
             # filebench
-            "filebench_varmail",
-            "filebench_oltp",
-            "filebench_fileserver",
-
+            # "filebench_varmail",
+            # "filebench_oltp",
+            # "filebench_fileserver",
             # dbench
-            "dbench_client",
-
+            # "dbench_client",
             # read/read
-            "MRPL",
-            "MRPM",
-            "MRPH",
-            "MRDM",
-            "MRDL",
+            # "MRPL",
+            # "MRPM",
+            # "MRPH",
+            # "MRDM",
+            # "MRDL",
             "DRBH",
             "DRBM",
             "DRBL",
-
             # read/write
             # "MRPM_bg",
-            # "DRBM_bg",
+            "DRBM_bg",
             # "MRDM_bg",
-            # "DRBH_bg",
-            # "DRBL_bg",
+            "DRBH_bg",
+            "DRBL_bg",
             # "MRDL_bg",
         ]
         self.BENCH_BG_SFX   = "_bg"
@@ -132,10 +131,10 @@ class Runner(object):
 
         # media config
         self.HOWTO_INIT_MEDIA = {
-            "mem":self.init_mem_disk,
-            "nvme":self.init_nvme_disk,
-            "ssd":self.init_ssd_disk,
-            "hdd":self.init_hdd_disk,
+            "mem": self.init_mem_disk,
+            "nvme": self.init_nvme_disk,
+            "ssd": self.init_ssd_disk,
+            "hdd": self.init_hdd_disk,
         }
 
         # misc. setup
@@ -482,8 +481,10 @@ def confirm_media_path():
     print("%" * 80)
     print("%% WARNING! WARNING! WARNING! WARNING! WARNING!")
     print("%" * 80)
-    yn = input("All data in %s, %s, %s and %s will be deleted. Is it ok? [Y,N]: "
-            % (Runner.HDDDEV, Runner.SSDDEV, Runner.NVMEDEV, Runner.LOOPDEV))
+    yn = input(
+        "All data in %s, %s, %s and %s will be deleted. Is it ok? [Y,N]: "
+        % (Runner.HDDDEV, Runner.SSDDEV, Runner.NVMEDEV, Runner.LOOPDEV)
+    )
     if yn != "Y":
         print("Please, check Runner.LOOPDEV and Runner.NVMEDEV")
         exit(1)
@@ -515,9 +516,11 @@ if __name__ == "__main__":
 
     # TODO: make it scriptable
     run_config = [
-        (Runner.CORE_FINE_GRAIN,
-         PerfMon.LEVEL_LOW,
-         ("mem", "*", "DWOL", "80", "directio")),
+        (
+            Runner.CORE_FINE_GRAIN,
+            PerfMon.LEVEL_LOW,
+            ("nvme", "ext2", "MWCL", "1", "bufferedio"),
+        ),
         # ("mem", "tmpfs", "filebench_varmail", "32", "directio")),
         # (Runner.CORE_COARSE_GRAIN,
         #  PerfMon.LEVEL_PERF_RECORD,
@@ -528,7 +531,7 @@ if __name__ == "__main__":
         #  ("*", "*", "*", str(cpupol.PHYSICAL_CHIPS * cpupol.CORE_PER_CHIP), "*"))
     ]
 
-    confirm_media_path()
+    # confirm_media_path()
     for c in run_config:
         runner = Runner(c[0], c[1], c[2])
         runner.run()
