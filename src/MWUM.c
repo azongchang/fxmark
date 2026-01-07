@@ -18,61 +18,66 @@
 #include "util.h"
 #include "rdtsc.h"
 
-static void set_test_file(struct worker *worker,
-                          uint64_t file_id, char *test_file)
+static void set_test_file(struct worker *worker, uint64_t file_id,
+			  char *test_file)
 {
-    struct fx_opt *fx_opt = fx_opt_worker(worker);
-    sprintf(test_file, "%s/u_sh_file_rm-%d-%" PRIu64 ".dat",
-            fx_opt->root, worker->id, file_id);
+	struct fx_opt *fx_opt = fx_opt_worker(worker);
+	sprintf(test_file, "%s/u_sh_file_rm-%d-%" PRIu64 ".dat", fx_opt->root,
+		worker->id, file_id);
 }
 
 static int pre_work(struct worker *worker)
 {
-    struct bench *bench =  worker->bench;
-    char path[PATH_MAX];
-    int fd, rc = 0;
+	struct bench *bench = worker->bench;
+	char path[PATH_MAX];
+	int fd, rc = 0;
 
-    /* time to create files */
-    for (;; ++worker->private[0]) {
-        set_test_file(worker, worker->private[0], path);
-        if ((fd = open(path, O_CREAT | O_RDWR, S_IRWXU)) == -1) {
-            if (errno == ENOSPC) {
-                --worker->private[0];
-		rc = 0;
-                goto out;
-            }
-            rc = errno;
-            goto err_out;
-        }
-	close(fd);
-    }
- err_out:
-    bench->stop = 1;
- out:
-    return rc;
+	int num_files = 20000000 / bench->ncpu < 2000000 ?
+			20000000 / bench->ncpu : 2000000;
+
+	/* time to create files */
+	for (; worker->private[0] < num_files; ++worker->private[0]) {
+		set_test_file(worker, worker->private[0], path);
+		if ((fd = open(path, O_CREAT | O_RDWR, S_IRWXU)) == -1) {
+			if (errno == ENOSPC) {
+				--worker->private[0];
+				rc = 0;
+				goto out;
+			}
+			rc = errno;
+			goto err_out;
+		}
+		close(fd);
+	}
+	--worker->private[0];
+	goto out;
+err_out:
+	bench->stop = 1;
+out:
+	return rc;
 }
 
 static int main_work(struct worker *worker)
 {
-    struct bench *bench = worker->bench;
-    uint64_t iter;
-    int rc = 0;
-    for (iter = 0; iter < worker->private[0] && !bench->stop; ++iter) {
-        char file[PATH_MAX];
-        set_test_file(worker, iter, file);
+	struct bench *bench = worker->bench;
+	uint64_t iter;
+	int rc = 0;
+	for (iter = 0; iter < worker->private[0] && !bench->stop; ++iter) {
+		char file[PATH_MAX];
+		set_test_file(worker, iter, file);
         if (unlink(file))
-            goto err_out;
-    }
- out:
-    worker->works = (double)iter;
-    return rc;
- err_out:
-    bench->stop = 1;
-    rc = errno;
-    goto out;
+			goto err_out;
+	}
+out:
+	worker->works = (double)iter;
+	return rc;
+err_out:
+	bench->stop = 1;
+	rc = errno;
+	goto out;
 }
 
 struct bench_operations u_sh_file_rm_ops = {
-    .pre_work  = pre_work,
-    .main_work = main_work,
+	.pre_work = pre_work,
+	.main_work = main_work,
 };

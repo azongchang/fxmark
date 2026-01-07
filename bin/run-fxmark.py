@@ -24,7 +24,7 @@ def catch_ctrl_C(sig, frame):
 
 class Runner(object):
     # media path
-    LOOPDEV = "/dev/loopX"
+    LOOPDEV = "/dev/loop0"
     NVMEDEV = "/dev/nvme0n1"
     HDDDEV = "/dev/sdX"
     SSDDEV = "/dev/sdY"
@@ -46,37 +46,41 @@ class Runner(object):
 
         # bench config
         self.DISK_SIZE     = "32G"
-        self.DURATION = 5  # seconds
+        self.DURATION = 50  # seconds
         self.DIRECTIOS     = ["bufferedio", "directio"]  # enable directio except tmpfs -> nodirectio 
         self.MEDIA_TYPES = ["ssd", "hdd", "nvme", "mem"]
         #        self.FS_TYPES      = [
         self.FS_TYPES = [
-            "tmpfs",
+            # "tmpfs",
             "ext4",
             "ext4_no_jnl",
             "xfs",
-            "btrfs",
+            # "btrfs",
             "f2fs",
-            "jfs", "reiserfs", "ext2", "ext3",
+            # "jfs",
+            # "reiserfs",
+            "ext2",
+            # "ext3",
+            # "ext2s",
         ]
         self.BENCH_TYPES = [
             # write/write
-            "DWAL",
-            "DWOL",
-            "DWOM",
-            "DWSL",
+            # "DWAL",
+            # "DWOL",
+            # "DWOM",
+            # "DWSL",
             # "MWRL",
             # "MWRM",
             "MWCL",
             "MWCM",
-            # "MWUM",
-            # "MWUL",
-            "DWTL",
-            # filebench
+            "MWUM",
+            "MWUL",
+            # "DWTL",
+            # # filebench
             # "filebench_varmail",
             # "filebench_oltp",
             # "filebench_fileserver",
-            # dbench
+            # # dbench
             # "dbench_client",
             # read/read
             # "MRPL",
@@ -84,15 +88,15 @@ class Runner(object):
             # "MRPH",
             # "MRDM",
             # "MRDL",
-            "DRBH",
-            "DRBM",
-            "DRBL",
+            # "DRBH",
+            # "DRBM",
+            # "DRBL",
             # read/write
             # "MRPM_bg",
-            "DRBM_bg",
+            # "DRBM_bg",
             # "MRDM_bg",
-            "DRBH_bg",
-            "DRBL_bg",
+            # "DRBH_bg",
+            # "DRBL_bg",
             # "MRDL_bg",
         ]
         self.BENCH_BG_SFX   = "_bg"
@@ -107,26 +111,29 @@ class Runner(object):
 
         # fs config
         self.HOWTO_MOUNT = {
-            "tmpfs":self.mount_tmpfs,
-            "ext2":self.mount_anyfs,
-            "ext3":self.mount_anyfs,
-            "ext4":self.mount_anyfs,
-            "ext4_no_jnl":self.mount_ext4_no_jnl,
-            "xfs":self.mount_anyfs,
-            "btrfs":self.mount_anyfs,
-            "f2fs":self.mount_anyfs,
-            "jfs":self.mount_anyfs,
-            "reiserfs":self.mount_anyfs,
+            "tmpfs": self.mount_tmpfs,
+            "ext2": self.mount_anyfs,
+            "ext2s": self.mount_ext2sfs,
+            "ext3": self.mount_anyfs,
+            "ext4": self.mount_anyfs,
+            "ext4_no_jnl": self.mount_ext4_no_jnl,
+            "xfs": self.mount_anyfs,
+            "btrfs": self.mount_anyfs,
+            "f2fs": self.mount_anyfs,
+            "jfs": self.mount_anyfs,
+            "reiserfs": self.mount_anyfs,
         }
         self.HOWTO_MKFS = {
-            "ext2":"-F",
-            "ext3":"-F",
-            "ext4":"-F",
-            "ext4_no_jnl":"-F",
-            "xfs":"-f",
-            "btrfs":"-f",
-            "jfs":"-q",
-            "reiserfs":"-q",
+            "ext2": "-F",
+            "ext2s": "-N 1000000 -F",
+            "ext3": "-F",
+            "ext4": "-F -O large_dir,huge_file",
+            "ext4_no_jnl": "-F",
+            "f2fs": "-f",
+            "xfs": "-f",
+            "btrfs": "-f",
+            "jfs": "-q",
+            "reiserfs": "-q",
         }
 
         # media config
@@ -224,7 +231,12 @@ class Runner(object):
         self.exec_cmd("sudo -v", self.dev_null)
 
     def drop_caches(self):
-        cmd = ' '.join(["sudo", 
+        sync_cmd = "sync"
+        if os.path.ismount(self.test_root):
+            sync_cmd = ' '.join(["sudo", "sync", "-f", self.test_root])
+        self.exec_cmd(sync_cmd, self.dev_null)
+
+        cmd = ' '.join(["sudo",
                         os.path.normpath(
                             os.path.join(CUR_DIR, "drop-caches"))])
         self.exec_cmd(cmd, self.dev_null)
@@ -253,8 +265,6 @@ class Runner(object):
         self.keep_sudo()
         self.exec_cmd("sudo sh -c \"echo 0 >/proc/sys/kernel/lock_stat\"",
                       self.dev_null)
-        self.drop_caches()
-        self.exec_cmd("sync", self.dev_null)
         self.set_cpus(ncore)
 
     def pre_work(self):
@@ -337,6 +347,27 @@ class Runner(object):
             return False
         p = self.exec_cmd("sudo chmod 777 " + mnt_path,
                           self.dev_null)
+        if p.returncode is not 0:
+            return False
+        return True
+
+    def mount_ext2sfs(self, media, fs, mnt_path):
+        (rc, dev_path) = self.init_media(media)
+        if not rc:
+            return False
+
+        p = self.exec_cmd(
+            "sudo mkfs.ext2" + " " + self.HOWTO_MKFS.get("ext2s", "") + " " + dev_path,
+            self.dev_null,
+        )
+        if p.returncode is not 0:
+            return False
+        p = self.exec_cmd(
+            " ".join(["sudo mount -t ext2s", dev_path, mnt_path]), self.dev_null
+        )
+        if p.returncode is not 0:
+            return False
+        p = self.exec_cmd("sudo chmod 777 " + mnt_path, self.dev_null)
         if p.returncode is not 0:
             return False
         return True
@@ -519,7 +550,7 @@ if __name__ == "__main__":
         (
             Runner.CORE_FINE_GRAIN,
             PerfMon.LEVEL_LOW,
-            ("nvme", "ext2", "MWCL", "1", "bufferedio"),
+            ("nvme", "ext4_no_jnl", "MWCM", "*", "bufferedio"),
         ),
         # ("mem", "tmpfs", "filebench_varmail", "32", "directio")),
         # (Runner.CORE_COARSE_GRAIN,

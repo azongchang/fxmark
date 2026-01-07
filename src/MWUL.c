@@ -37,6 +37,9 @@ static int pre_work(struct worker *worker)
     char path[PATH_MAX];
     int fd, rc = 0;
 
+    int num_files = 20000000 / bench->ncpu < 2000000 ? 20000000 / bench->ncpu :
+						       2000000;
+
     /* creating private directory */
     set_test_root(worker, path);
     rc = mkdir_p(path);
@@ -44,7 +47,7 @@ static int pre_work(struct worker *worker)
         goto err_out;
 
     /* time to create files */
-    for (;; ++worker->private[0]) {
+    for (;worker->private[0] < num_files; ++worker->private[0]) {
         set_test_file(worker, worker->private[0], path);
         if ((fd = open(path, O_CREAT | O_RDWR, S_IRWXU)) == -1) {
             if (errno == ENOSPC) {
@@ -57,6 +60,8 @@ static int pre_work(struct worker *worker)
         }
         close(fd);
     }
+    --worker->private[0];
+    goto out;
  err_out:
     bench->stop = 1;
  out:
