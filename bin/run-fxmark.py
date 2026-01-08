@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import os
 import sys
 import signal
@@ -23,9 +24,14 @@ def catch_ctrl_C(sig, frame):
     print("Umount a testing file system. Please wait.")
 
 class Runner(object):
+    # mode: 0 - ssrfs only
+    #       1 - normal only
+    #       2 - normal + ssrfs
+    mode = 0
+
     # media path
     LOOPDEV = "/dev/loop0"
-    NVMEDEV = "/dev/nvme0n1"
+    NVMEDEV = "/dev/disk/by-id/nvme-INTEL_SSDPF21Q400GB_PHAL11310014400AGN"
     HDDDEV = "/dev/sdX"
     SSDDEV = "/dev/sdY"
 
@@ -46,7 +52,7 @@ class Runner(object):
 
         # bench config
         self.DISK_SIZE     = "32G"
-        self.DURATION = 50  # seconds
+        self.DURATION = 5  # seconds
         self.DIRECTIOS     = ["bufferedio", "directio"]  # enable directio except tmpfs -> nodirectio 
         self.MEDIA_TYPES = ["ssd", "hdd", "nvme", "mem"]
         #        self.FS_TYPES      = [
@@ -65,17 +71,17 @@ class Runner(object):
         ]
         self.BENCH_TYPES = [
             # write/write
-            # "DWAL",
-            # "DWOL",
-            # "DWOM",
-            # "DWSL",
-            # "MWRL",
-            # "MWRM",
+            "DWAL",
+            "DWOL",
+            "DWOM",
+            "DWSL",
+            "MWRL",
+            "MWRM",
             "MWCL",
             "MWCM",
             "MWUM",
             "MWUL",
-            # "DWTL",
+            "DWTL",
             # # filebench
             # "filebench_varmail",
             # "filebench_oltp",
@@ -83,21 +89,21 @@ class Runner(object):
             # # dbench
             # "dbench_client",
             # read/read
-            # "MRPL",
-            # "MRPM",
-            # "MRPH",
-            # "MRDM",
-            # "MRDL",
-            # "DRBH",
-            # "DRBM",
-            # "DRBL",
+            "MRPL",
+            "MRPM",
+            "MRPH",
+            "MRDM",
+            "MRDL",
+            "DRBH",
+            "DRBM",
+            "DRBL",
             # read/write
-            # "MRPM_bg",
-            # "DRBM_bg",
-            # "MRDM_bg",
-            # "DRBH_bg",
-            # "DRBL_bg",
-            # "MRDL_bg",
+            "MRPM_bg",
+            "DRBM_bg",
+            "MRDM_bg",
+            "DRBH_bg",
+            "DRBL_bg",
+            "MRDL_bg",
         ]
         self.BENCH_BG_SFX   = "_bg"
 
@@ -483,24 +489,48 @@ class Runner(object):
     def run(self):
         try:
             cnt = -1
+            totol = 0
             self.log_start()
-            for (cnt, (media, fs, bench, ncore, dio)) in enumerate(self.gen_config()):
-                (ncore, nbg) = self.add_bg_worker_if_needed(bench, ncore)
-                nfg = ncore - nbg
+            if (self.mode == 1 or self.mode == 2):
+                self.exec_cmd('sh -c "echo 0 | sudo tee /sys/module/ssrfs/parameters/ssrfs_enabled"', self.dev_null)
+                for (cnt, (media, fs, bench, ncore, dio)) in enumerate(self.gen_config()):
+                    (ncore, nbg) = self.add_bg_worker_if_needed(bench, ncore)
+                    nfg = ncore - nbg
 
-                if self.DRYRUN:
+                    if self.DRYRUN:
+                        self.log("## %s:%s:%s:%s:%s" % (media, fs, bench, nfg, dio))
+                        continue
+
+                    self.prepre_work(ncore)
+                    if not self.mount(media, fs, self.test_root):
+                        self.log("# Fail to mount %s on %s." % (fs, media))
+                        continue
                     self.log("## %s:%s:%s:%s:%s" % (media, fs, bench, nfg, dio))
-                    continue
+                    self.pre_work()
+                    self.fxmark(media, fs, bench, ncore, nfg, nbg, dio)
+                    self.post_work()
+                totol += (cnt + 1)
+            if (self.mode == 0 or self.mode == 2):
+                self.exec_cmd('sh -c "echo 7 | sudo tee /sys/module/ssrfs/parameters/ssrfs_enabled"', self.dev_null)
+                for (cnt, (media, fs, bench, ncore, dio)) in enumerate(self.gen_config()):
+                    (ncore, nbg) = self.add_bg_worker_if_needed(bench, ncore)
+                    nfg = ncore - nbg
 
-                self.prepre_work(ncore)
-                if not self.mount(media, fs, self.test_root):
-                    self.log("# Fail to mount %s on %s." % (fs, media))
-                    continue
-                self.log("## %s:%s:%s:%s:%s" % (media, fs, bench, nfg, dio))
-                self.pre_work()
-                self.fxmark(media, fs, bench, ncore, nfg, nbg, dio)
-                self.post_work()
-            self.log("### NUM_TEST_CONF  = %d" % (cnt + 1))
+                    if self.DRYRUN:
+                        self.log("## %s:%s:%s:%s:%s" % (media, f"{fs}s", bench, nfg, dio))
+                        continue
+
+                    self.prepre_work(ncore)
+                    if not self.mount(media, fs, self.test_root):
+                        self.log("# Fail to mount %s on %s." % (fs, media))
+                        continue
+                    self.log("## %s:%s:%s:%s:%s" % (media, f"{fs}s", bench, nfg, dio))
+                    self.pre_work()
+                    self.fxmark(media, fs, bench, ncore, nfg, nbg, dio)
+                    self.post_work()
+                self.exec_cmd('sh -c "echo 0 | sudo tee /sys/module/ssrfs/parameters/ssrfs_enabled"', self.dev_null)
+                totol += (cnt + 1)
+            self.log("### NUM_TEST_CONF  = %d" % totol)
         finally:
             signal.signal(signal.SIGINT, catch_ctrl_C)
             self.log_end()
@@ -527,6 +557,17 @@ def confirm_media_path():
     print("\n\n")
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run fxmark workloads")
+    parser.add_argument(
+        "--mode",
+        choices=["ssrfs", "linux", "all"],
+        default="ssrfs",
+        help="ssrfs-only, linux-only, or both",
+    )
+    args = parser.parse_args()
+    mode_map = {"ssrfs": 0, "linux": 1, "all": 2}
+    selected_mode = mode_map[args.mode]
+
     # config parameters
     # -----------------
     #
@@ -550,7 +591,7 @@ if __name__ == "__main__":
         (
             Runner.CORE_FINE_GRAIN,
             PerfMon.LEVEL_LOW,
-            ("nvme", "ext4_no_jnl", "MWCM", "*", "bufferedio"),
+            ("nvme", "ext4_no_jnl", "DRBH", "*", "bufferedio"),
         ),
         # ("mem", "tmpfs", "filebench_varmail", "32", "directio")),
         # (Runner.CORE_COARSE_GRAIN,
@@ -565,4 +606,5 @@ if __name__ == "__main__":
     # confirm_media_path()
     for c in run_config:
         runner = Runner(c[0], c[1], c[2])
+        runner.mode = selected_mode
         runner.run()
