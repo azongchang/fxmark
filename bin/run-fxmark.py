@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import os
 import sys
 import signal
@@ -11,6 +12,7 @@ from os.path import join
 from perfmon import PerfMon
 
 CUR_DIR = os.path.abspath(os.path.dirname(__file__))
+DEFAULT_CONFIG_PATH = os.path.join(CUR_DIR, "run-config.json")
 
 try:
     import cpupol
@@ -42,8 +44,12 @@ class Runner(object):
     def __init__(self, \
                  core_grain = CORE_COARSE_GRAIN, \
                  pfm_lvl = PerfMon.LEVEL_LOW, \
-                 run_filter = ("*", "*", "*", "*", "*")):
+                 run_filter = ("*", "*", "*", "*", "*"), \
+                 mode = 2, \
+                 disk_size = "32G", \
+                 duration = 5):
         # run config
+        self.mode = mode
         self.CORE_GRAIN    = core_grain
         self.PERFMON_LEVEL = pfm_lvl
         self.FILTER        = run_filter # media, fs, bench, ncore, directio
@@ -51,23 +57,21 @@ class Runner(object):
         self.DEBUG_OUT     = False
 
         # bench config
-        self.DISK_SIZE     = "32G"
-        self.DURATION = 5  # seconds
+        self.DISK_SIZE     = disk_size
+        self.DURATION = duration  # seconds
         self.DIRECTIOS     = ["bufferedio", "directio"]  # enable directio except tmpfs -> nodirectio 
         self.MEDIA_TYPES = ["ssd", "hdd", "nvme", "mem"]
-        #        self.FS_TYPES      = [
         self.FS_TYPES = [
-            # "tmpfs",
+            "tmpfs",
             "ext4",
             "ext4_no_jnl",
             "xfs",
-            # "btrfs",
+            "btrfs",
             "f2fs",
-            # "jfs",
-            # "reiserfs",
+            "jfs",
+            "reiserfs",
             "ext2",
-            # "ext3",
-            # "ext2s",
+            "ext3",
         ]
         self.BENCH_TYPES = [
             # write/write
@@ -83,11 +87,11 @@ class Runner(object):
             "MWUL",
             "DWTL",
             # # filebench
-            # "filebench_varmail",
-            # "filebench_oltp",
-            # "filebench_fileserver",
+            "filebench_varmail",
+            "filebench_oltp",
+            "filebench_fileserver",
             # # dbench
-            # "dbench_client",
+            "dbench_client",
             # read/read
             "MRPL",
             "MRPM",
@@ -119,7 +123,6 @@ class Runner(object):
         self.HOWTO_MOUNT = {
             "tmpfs": self.mount_tmpfs,
             "ext2": self.mount_anyfs,
-            "ext2s": self.mount_ext2sfs,
             "ext3": self.mount_anyfs,
             "ext4": self.mount_anyfs,
             "ext4_no_jnl": self.mount_ext4_no_jnl,
@@ -131,7 +134,6 @@ class Runner(object):
         }
         self.HOWTO_MKFS = {
             "ext2": "-F",
-            "ext2s": "-N 1000000 -F",
             "ext3": "-F",
             "ext4": "-F -O large_dir,huge_file",
             "ext4_no_jnl": "-F",
@@ -251,7 +253,7 @@ class Runner(object):
         if self.active_ncore == ncore:
             return
         self.active_ncore = ncore
-        if ncore is 0:
+        if ncore == 0:
             ncores = "all"
         else:
             ncores = ','.join(map(lambda c: str(c), cpupol.seq_cores[0:ncore]))
@@ -287,10 +289,11 @@ class Runner(object):
     def umount(self, where):
         while True:
             p = self.exec_cmd("sudo umount " + where, self.dev_null)
-            if p.returncode is not 0:
+            if p.returncode != 0:
                 break
         (umount_hook, self.umount_hook) = (self.umount_hook, [])
-        map(lambda hook: hook(), umount_hook);
+        for hook in umount_hook:
+            hook()
 
     def init_mem_disk(self):
         self.unset_loopdev()
@@ -344,37 +347,16 @@ class Runner(object):
                           + " " + self.HOWTO_MKFS.get(fs, "")
                           + " " + dev_path,
                           self.dev_null)
-        if p.returncode is not 0:
+        if p.returncode != 0:
             return False
         p = self.exec_cmd(' '.join(["sudo mount -t", fs,
                                     dev_path, mnt_path]),
                           self.dev_null)
-        if p.returncode is not 0:
+        if p.returncode != 0:
             return False
         p = self.exec_cmd("sudo chmod 777 " + mnt_path,
                           self.dev_null)
-        if p.returncode is not 0:
-            return False
-        return True
-
-    def mount_ext2sfs(self, media, fs, mnt_path):
-        (rc, dev_path) = self.init_media(media)
-        if not rc:
-            return False
-
-        p = self.exec_cmd(
-            "sudo mkfs.ext2" + " " + self.HOWTO_MKFS.get("ext2s", "") + " " + dev_path,
-            self.dev_null,
-        )
-        if p.returncode is not 0:
-            return False
-        p = self.exec_cmd(
-            " ".join(["sudo mount -t ext2s", dev_path, mnt_path]), self.dev_null
-        )
-        if p.returncode is not 0:
-            return False
-        p = self.exec_cmd("sudo chmod 777 " + mnt_path, self.dev_null)
-        if p.returncode is not 0:
+        if p.returncode != 0:
             return False
         return True
 
@@ -387,20 +369,20 @@ class Runner(object):
                           + " " + self.HOWTO_MKFS.get(fs, "")
                           + " " + dev_path,
                           self.dev_null)
-        if p.returncode is not 0:
+        if p.returncode != 0:
             return False
         p = self.exec_cmd("sudo tune2fs -O ^has_journal %s" % dev_path,
                           self.dev_null)
-        if p.returncode is not 0:
+        if p.returncode != 0:
             return False
         p = self.exec_cmd(' '.join(["sudo mount -t ext4",
                                     dev_path, mnt_path]),
                           self.dev_null)
-        if p.returncode is not 0:
+        if p.returncode != 0:
             return False
         p = self.exec_cmd("sudo chmod 777 " + mnt_path,
                           self.dev_null)
-        if p.returncode is not 0:
+        if p.returncode != 0:
             return False
         return True
 
@@ -417,7 +399,7 @@ class Runner(object):
         for (k1, k2) in zip(key1, key2):
             if k1 == "*" or k2 == "*":
                 continue
-            if k1 != k2:
+            if str(k1) != str(k2):
                 return False
         return True
 
@@ -454,10 +436,10 @@ class Runner(object):
             os.path.join(self.log_dir,
                          '.'.join([media, fs, bench, str(nfg), "pm"])))
         (bin, type) = self.get_bin_type(bench)
-        directio = '1' if dio is "directio" else '0'
+        directio = '1' if dio == "directio" else '0'
 
-        if directio is '1':
-            if fs is "tmpfs": 
+        if directio == '1':
+            if fs == "tmpfs": 
                 print("# INFO: DirectIO under tmpfs disabled by default")
                 directio='0';
             else: 
@@ -538,6 +520,140 @@ class Runner(object):
             self.umount(self.test_root)
             self.set_cpus(0)
 
+def _ensure_list(v):
+    return list(v) if isinstance(v, (list, tuple)) else [v]
+
+def _get_config_value(cfg, keys, default=None):
+    for k in keys:
+        if k in cfg:
+            return cfg[k]
+    return default
+
+def parse_core_grain(value):
+    mapping = {
+        "CORE_FINE_GRAIN": Runner.CORE_FINE_GRAIN,
+        "FINE": Runner.CORE_FINE_GRAIN,
+        "CORE_COARSE_GRAIN": Runner.CORE_COARSE_GRAIN,
+        "COARSE": Runner.CORE_COARSE_GRAIN,
+    }
+    if isinstance(value, str):
+        key = value if value in mapping else value.upper()
+        if key in mapping:
+            return mapping[key]
+        try:
+            return int(value)
+        except ValueError:
+            return Runner.CORE_COARSE_GRAIN
+    if isinstance(value, int):
+        return value
+    return Runner.CORE_COARSE_GRAIN
+
+def parse_perfmon_level(value):
+    alias = {
+        "LOW": "LEVEL_LOW",
+        "PERF_RECORD": "LEVEL_PERF_RECORD",
+        "PERF_PROBE_SLEEP_LOCK_D": "LEVEL_PERF_PROBE_SLEEP_LOCK_D",
+        "PERF_PROBE_SLEEP_LOCK": "LEVEL_PERF_PROBE_SLEEP_LOCK",
+        "PERF_LOCK": "LEVEL_PERF_LOCK",
+        "PERF_STAT": "LEVEL_PERF_STAT",
+    }
+    if isinstance(value, str):
+        upper = value.upper()
+        key = value if value.startswith("LEVEL_") else alias.get(upper, value)
+        if hasattr(PerfMon, key):
+            return getattr(PerfMon, key)
+        try:
+            return int(value)
+        except ValueError:
+            return PerfMon.LEVEL_LOW
+    if isinstance(value, int):
+        return value
+    return PerfMon.LEVEL_LOW
+
+def normalize_filter(entry, default_media="*"):
+    if "filter" in entry:
+        flt = entry["filter"]
+    else:
+        directio = entry.get("directio", entry.get("dio", "*"))
+        if isinstance(directio, bool):
+            directio = "directio" if directio else "bufferedio"
+        flt = [
+            entry.get("media", entry.get("device", entry.get("dev_type", default_media))),
+            entry.get("fs", "*"),
+            entry.get("bench", "*"),
+            entry.get("core", "*"),
+            directio,
+        ]
+    if len(flt) != 5:
+        raise ValueError("Each filter must have 5 elements: media, fs, bench, core, directio")
+    return flt
+
+def expand_run_configs(raw_configs, default_core_grain, default_perfmon_level, default_media="*"):
+    expanded = []
+    for entry in raw_configs:
+        core_grain = parse_core_grain(entry.get("core_grain", default_core_grain))
+        perf_level = parse_perfmon_level(entry.get("perfmon_level", default_perfmon_level))
+        media, fs, bench, core, dio = normalize_filter(entry, default_media)
+        for m in _ensure_list(media):
+            for f in _ensure_list(fs):
+                for b in _ensure_list(bench):
+                    for c in _ensure_list(core):
+                        c_val = int(c) if isinstance(c, str) and str(c).isdigit() else c
+                        for d in _ensure_list(dio):
+                            d_val = "directio" if d is True else "bufferedio" if d is False else d
+                            expanded.append((core_grain, perf_level, (m, f, b, c_val, d_val)))
+    return expanded
+
+def apply_device_paths(cfg):
+    key_map = {
+        "loop_dev": "LOOPDEV",
+        "nvme_dev": "NVMEDEV",
+        "hdd_dev": "HDDDEV",
+        "ssd_dev": "SSDDEV",
+    }
+    for key in ("LOOPDEV", "NVMEDEV", "HDDDEV", "SSDDEV"):
+        if key in cfg:
+            setattr(Runner, key, cfg[key])
+    for src, dst in key_map.items():
+        if src in cfg:
+            setattr(Runner, dst, cfg[src])
+    if "dev_path" in cfg:
+        dev_type = cfg.get("dev_type", "").lower()
+        type_to_key = {
+            "nvme": "NVMEDEV",
+            "ssd": "SSDDEV",
+            "hdd": "HDDDEV",
+            "loop": "LOOPDEV",
+        }
+        dst = type_to_key.get(dev_type)
+        if dst:
+            setattr(Runner, dst, cfg["dev_path"])
+
+def run_plot(runner, plot_cfg):
+    if not plot_cfg:
+        return
+    plot_type = "sc"
+    out_name = "plot"
+    if isinstance(plot_cfg, bool):
+        if not plot_cfg:
+            return
+    elif isinstance(plot_cfg, str):
+        plot_type = plot_cfg
+    elif isinstance(plot_cfg, dict):
+        plot_type = plot_cfg.get("type", plot_type)
+        out_name = plot_cfg.get("out", out_name)
+    log_arg = runner.log_path
+    out_arg = os.path.join(runner.log_dir, out_name)
+    cmd = ' '.join([
+        os.path.join(CUR_DIR, "plotter.py"),
+        "--ty", str(plot_type),
+        "--log", log_arg,
+        "--out", out_arg,
+    ])
+    p = runner.exec_cmd(cmd, runner.redirect)
+    if p.returncode != 0:
+        print(f"Plot command failed: {cmd}", file=sys.stderr)
+
 def confirm_media_path():
     print("%" * 80)
     print("%% WARNING! WARNING! WARNING! WARNING! WARNING!")
@@ -561,12 +677,43 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode",
         choices=["ssrfs", "linux", "all"],
-        default="ssrfs",
-        help="ssrfs-only, linux-only, or both",
+        default=None,
+        help="ssrfs-only, linux-only, or both (overrides config)",
+    )
+    parser.add_argument(
+        "--config",
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to JSON configuration file",
     )
     args = parser.parse_args()
     mode_map = {"ssrfs": 0, "linux": 1, "all": 2}
-    selected_mode = mode_map[args.mode]
+
+    try:
+        with open(args.config, "r") as fd:
+            cfg = json.load(fd)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Failed to load config {args.config}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    apply_device_paths(cfg)
+    cfg_mode = cfg.get("mode", "ssrfs")
+    mode = mode_map[args.mode] if args.mode else mode_map.get(cfg_mode, 0)
+    disk_size = _get_config_value(cfg, ["DISK_SIZE", "disk_size", "dev_size"], "32G")
+    duration = _get_config_value(cfg, ["DURATION", "duration"], 5)
+    default_core_grain = parse_core_grain(cfg.get("core_grain", Runner.CORE_COARSE_GRAIN))
+    default_perf_level = parse_perfmon_level(cfg.get("perfmon_level", PerfMon.LEVEL_LOW))
+    raw_run_config = cfg.get("run_config", [])
+    if isinstance(raw_run_config, dict):
+        raw_run_config = [raw_run_config]
+    default_media = cfg.get("dev_type", cfg.get("media", "*"))
+    try:
+        if not raw_run_config:
+            raise ValueError("run_config must contain at least one entry")
+        expanded_run_config = expand_run_configs(raw_run_config, default_core_grain, default_perf_level, default_media)
+    except ValueError as exc:
+        print(f"Invalid run_config in {args.config}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    plot_cfg = cfg.get("plot", None)
 
     # config parameters
     # -----------------
@@ -587,24 +734,9 @@ if __name__ == "__main__":
     # - (storage device, filesystem, test case, # core, directio | bufferedio)
 
     # TODO: make it scriptable
-    run_config = [
-        (
-            Runner.CORE_FINE_GRAIN,
-            PerfMon.LEVEL_LOW,
-            ("nvme", "ext4_no_jnl", "DRBH", "*", "bufferedio"),
-        ),
-        # ("mem", "tmpfs", "filebench_varmail", "32", "directio")),
-        # (Runner.CORE_COARSE_GRAIN,
-        #  PerfMon.LEVEL_PERF_RECORD,
-        #  ("*", "*", "*", "*", "bufferedio")),
-        #
-        # (Runner.CORE_COARSE_GRAIN,
-        #  PerfMon.LEVEL_PERF_RECORD,
-        #  ("*", "*", "*", str(cpupol.PHYSICAL_CHIPS * cpupol.CORE_PER_CHIP), "*"))
-    ]
-
     # confirm_media_path()
-    for c in run_config:
-        runner = Runner(c[0], c[1], c[2])
-        runner.mode = selected_mode
+    for c in expanded_run_config:
+        runner = Runner(c[0], c[1], c[2], disk_size=disk_size, duration=duration)
+        runner.mode = mode
         runner.run()
+        run_plot(runner, plot_cfg)

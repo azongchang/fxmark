@@ -24,8 +24,8 @@ $  make clean
 ## How to run
 
 - Benchmark configuration
-    - Set target media paths at bin/run-fxmark.py (e.g., Runner.LOOPDEV)
-    - Set configuration for each run at bin/run-fxmark.py (i.e., run_config)
+    - Set target media paths and defaults in bin/run-config.json (e.g., LOOPDEV)
+    - Set configuration for each run in bin/run-config.json (i.e., run_config)
 
 - Run benchmark
     - A log file will be created at 'logs' directory with starting time.
