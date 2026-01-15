@@ -42,7 +42,7 @@ class Runner(object):
     CORE_COARSE_GRAIN = 1
 
     def __init__(self, \
-                 core_grain = CORE_COARSE_GRAIN, \
+                 core_grain = CORE_FINE_GRAIN, \
                  pfm_lvl = PerfMon.LEVEL_LOW, \
                  run_filter = ("*", "*", "*", "*", "*"), \
                  mode = 2, \
@@ -181,13 +181,16 @@ class Runner(object):
         self.active_ncore = -1
 
     def log_start(self):
+        log_subdir = getattr(Runner, "LOG_SUBDIR", None)
+        if not log_subdir:
+            log_subdir = str(datetime.datetime.now()).replace(' ','-').replace(':','-')
         self.log_dir = os.path.normpath(
-            os.path.join(CUR_DIR, self.LOGD_NAME,
-                         str(datetime.datetime.now()).replace(' ','-').replace(':','-')))
-        self.log_path = os.path.normpath( os.path.join(self.log_dir, "fxmark.log"))
+            os.path.join(CUR_DIR, self.LOGD_NAME, log_subdir))
+        self.log_path = os.path.normpath(os.path.join(self.log_dir, "fxmark.log"))
         self.exec_cmd("mkdir -p " + self.log_dir, self.dev_null)
 
-        self.log_fd = open(self.log_path, "bw")
+        log_mode = "ab" if os.path.exists(self.log_path) else "bw"
+        self.log_fd = open(self.log_path, log_mode)
         p = self.exec_cmd("echo -n \"### SYSTEM         = \"; uname -a", self.redirect)
         if self.redirect:
             for l in p.stdout.readlines():
@@ -493,7 +496,7 @@ class Runner(object):
                     self.post_work()
                 totol += (cnt + 1)
             if (self.mode == 0 or self.mode == 2):
-                self.exec_cmd('sh -c "echo 7 | sudo tee /sys/module/ssrfs/parameters/ssrfs_enabled"', self.dev_null)
+                self.exec_cmd('sh -c "echo 15 | sudo tee /sys/module/ssrfs/parameters/ssrfs_enabled"', self.dev_null)
                 for (cnt, (media, fs, bench, ncore, dio)) in enumerate(self.gen_config()):
                     (ncore, nbg) = self.add_bg_worker_if_needed(bench, ncore)
                     nfg = ncore - nbg
@@ -543,10 +546,10 @@ def parse_core_grain(value):
         try:
             return int(value)
         except ValueError:
-            return Runner.CORE_COARSE_GRAIN
+            return Runner.CORE_FINE_GRAIN
     if isinstance(value, int):
         return value
-    return Runner.CORE_COARSE_GRAIN
+    return Runner.CORE_FINE_GRAIN
 
 def parse_perfmon_level(value):
     alias = {
@@ -700,7 +703,7 @@ if __name__ == "__main__":
     mode = mode_map[args.mode] if args.mode else mode_map.get(cfg_mode, 0)
     disk_size = _get_config_value(cfg, ["DISK_SIZE", "disk_size", "dev_size"], "32G")
     duration = _get_config_value(cfg, ["DURATION", "duration"], 5)
-    default_core_grain = parse_core_grain(cfg.get("core_grain", Runner.CORE_COARSE_GRAIN))
+    default_core_grain = parse_core_grain(cfg.get("core_grain", Runner.CORE_FINE_GRAIN))
     default_perf_level = parse_perfmon_level(cfg.get("perfmon_level", PerfMon.LEVEL_LOW))
     raw_run_config = cfg.get("run_config", [])
     if isinstance(raw_run_config, dict):
@@ -714,6 +717,9 @@ if __name__ == "__main__":
         print(f"Invalid run_config in {args.config}: {exc}", file=sys.stderr)
         sys.exit(1)
     plot_cfg = cfg.get("plot", None)
+
+    # use a single timestamped log folder/file for all run_config entries in this invocation
+    Runner.LOG_SUBDIR = str(datetime.datetime.now()).replace(' ','-').replace(':','-')
 
     # config parameters
     # -----------------
@@ -735,8 +741,11 @@ if __name__ == "__main__":
 
     # TODO: make it scriptable
     # confirm_media_path()
+    last_runner = None
     for c in expanded_run_config:
         runner = Runner(c[0], c[1], c[2], disk_size=disk_size, duration=duration)
         runner.mode = mode
         runner.run()
-        run_plot(runner, plot_cfg)
+        last_runner = runner
+    if last_runner:
+        run_plot(last_runner, plot_cfg)
