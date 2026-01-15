@@ -1,0 +1,23 @@
+{
+  "mode": "ssrfs",
+  "dev_type": "nvme",
+  "dev_path": "/dev/disk/by-id/nvme-INTEL_SSDPF21Q400GB_PHAL11310014400AGN",
+  "dev_size": "32G",
+  "duration": 5,
+  "run_config": {
+    "fs": [
+      "ext4_no_jnl"
+    ],
+    "bench": [
+      "DWOL",
+      "DWOM",
+      "MWCL",
+      "MWCM",
+      "MWUL",
+      "MWUM"
+    ],
+    "core": "*",
+    "dio": false
+  },
+  "plot": true
+}
