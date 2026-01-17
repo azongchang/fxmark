@@ -26,10 +26,6 @@ def catch_ctrl_C(sig, frame):
     print("Umount a testing file system. Please wait.")
 
 class Runner(object):
-    # mode: 0 - ssrfs only
-    #       1 - normal only
-    #       2 - normal + ssrfs
-    mode = 0
 
     # media path
     LOOPDEV = "/dev/loop0"
@@ -42,16 +38,12 @@ class Runner(object):
     CORE_COARSE_GRAIN = 1
 
     def __init__(self, \
-                 core_grain = CORE_FINE_GRAIN, \
-                 pfm_lvl = PerfMon.LEVEL_LOW, \
                  run_filter = ("*", "*", "*", "*", "*"), \
-                 mode = 2, \
                  disk_size = "32G", \
                  duration = 5):
         # run config
-        self.mode = mode
-        self.CORE_GRAIN    = core_grain
-        self.PERFMON_LEVEL = pfm_lvl
+        self.CORE_GRAIN    = Runner.CORE_FINE_GRAIN
+        self.PERFMON_LEVEL = PerfMon.LEVEL_LOW
         self.FILTER        = run_filter # media, fs, bench, ncore, directio
         self.DRYRUN        = False
         self.DEBUG_OUT     = False
@@ -399,10 +391,15 @@ class Runner(object):
         return mount_fn(media, fs, mnt_path)
 
     def _match_config(self, key1, key2):
+        def _match_value(filter_val, actual_val):
+            if filter_val == "*" or actual_val == "*":
+                return True
+            if isinstance(filter_val, (list, tuple, set)):
+                return any(_match_value(v, actual_val) for v in filter_val)
+            return str(filter_val) == str(actual_val)
+
         for (k1, k2) in zip(key1, key2):
-            if k1 == "*" or k2 == "*":
-                continue
-            if str(k1) != str(k2):
+            if not _match_value(k1, k2):
                 return False
         return True
 
@@ -471,107 +468,55 @@ class Runner(object):
         self.exec_cmd("sudo sh -c \"echo 0 >/proc/sys/kernel/lock_stat\"",
                       self.dev_null)
 
-    def run(self):
+    def run(self, run_filters=None):
+        configs = run_filters or [self.FILTER]
+        ssrfs_enabled = False
         try:
-            cnt = -1
-            totol = 0
-            self.log_start()
-            if (self.mode == 1 or self.mode == 2):
-                self.exec_cmd('sh -c "echo 0 | sudo tee /sys/module/ssrfs/parameters/ssrfs_enabled"', self.dev_null)
-                for (cnt, (media, fs, bench, ncore, dio)) in enumerate(self.gen_config()):
-                    (ncore, nbg) = self.add_bg_worker_if_needed(bench, ncore)
-                    nfg = ncore - nbg
+            with open("/sys/module/ssrfs/parameters/ssrfs_enabled") as fd:
+                ssrfs_enabled = fd.read().strip() not in ("", "0")
+        except OSError:
+            ssrfs_enabled = False
+        try:
+            for flt in configs:
+                self.FILTER = flt
+                self.ncores = self.get_ncores()
 
-                    if self.DRYRUN:
-                        self.log("## %s:%s:%s:%s:%s" % (media, fs, bench, nfg, dio))
-                        continue
+                cnt = -1
+                totol = 0
+                self.log_start()
+                try:
+                    for (cnt, (media, fs, bench, ncore, dio)) in enumerate(self.gen_config()):
+                        (ncore, nbg) = self.add_bg_worker_if_needed(bench, ncore)
+                        nfg = ncore - nbg
 
-                    self.prepre_work(ncore)
-                    if not self.mount(media, fs, self.test_root):
-                        self.log("# Fail to mount %s on %s." % (fs, media))
-                        continue
-                    self.log("## %s:%s:%s:%s:%s" % (media, fs, bench, nfg, dio))
-                    self.pre_work()
-                    self.fxmark(media, fs, bench, ncore, nfg, nbg, dio)
-                    self.post_work()
-                totol += (cnt + 1)
-            if (self.mode == 0 or self.mode == 2):
-                self.exec_cmd('sh -c "echo 15 | sudo tee /sys/module/ssrfs/parameters/ssrfs_enabled"', self.dev_null)
-                for (cnt, (media, fs, bench, ncore, dio)) in enumerate(self.gen_config()):
-                    (ncore, nbg) = self.add_bg_worker_if_needed(bench, ncore)
-                    nfg = ncore - nbg
+                        log_fs = fs + "s" if ssrfs_enabled else fs
+                        if self.DRYRUN:
+                            self.log("## %s:%s:%s:%s:%s" % (media, log_fs, bench, nfg, dio))
+                            continue
 
-                    if self.DRYRUN:
-                        self.log("## %s:%s:%s:%s:%s" % (media, f"{fs}s", bench, nfg, dio))
-                        continue
-
-                    self.prepre_work(ncore)
-                    if not self.mount(media, fs, self.test_root):
-                        self.log("# Fail to mount %s on %s." % (fs, media))
-                        continue
-                    self.log("## %s:%s:%s:%s:%s" % (media, f"{fs}s", bench, nfg, dio))
-                    self.pre_work()
-                    self.fxmark(media, fs, bench, ncore, nfg, nbg, dio)
-                    self.post_work()
-                self.exec_cmd('sh -c "echo 0 | sudo tee /sys/module/ssrfs/parameters/ssrfs_enabled"', self.dev_null)
-                totol += (cnt + 1)
-            self.log("### NUM_TEST_CONF  = %d" % totol)
+                        self.prepre_work(ncore)
+                        if not self.mount(media, fs, self.test_root):
+                            self.log("# Fail to mount %s on %s." % (fs, media))
+                            continue
+                        self.log("## %s:%s:%s:%s:%s" % (media, log_fs, bench, nfg, dio))
+                        self.pre_work()
+                        self.fxmark(media, fs, bench, ncore, nfg, nbg, dio)
+                        self.post_work()
+                    totol += (cnt + 1)
+                    self.log("### NUM_TEST_CONF  = %d" % totol)
+                finally:
+                    self.log_end()
         finally:
             signal.signal(signal.SIGINT, catch_ctrl_C)
-            self.log_end()
             self.fxmark_cleanup()
             self.umount(self.test_root)
             self.set_cpus(0)
-
-def _ensure_list(v):
-    return list(v) if isinstance(v, (list, tuple)) else [v]
 
 def _get_config_value(cfg, keys, default=None):
     for k in keys:
         if k in cfg:
             return cfg[k]
     return default
-
-def parse_core_grain(value):
-    mapping = {
-        "CORE_FINE_GRAIN": Runner.CORE_FINE_GRAIN,
-        "FINE": Runner.CORE_FINE_GRAIN,
-        "CORE_COARSE_GRAIN": Runner.CORE_COARSE_GRAIN,
-        "COARSE": Runner.CORE_COARSE_GRAIN,
-    }
-    if isinstance(value, str):
-        key = value if value in mapping else value.upper()
-        if key in mapping:
-            return mapping[key]
-        try:
-            return int(value)
-        except ValueError:
-            return Runner.CORE_FINE_GRAIN
-    if isinstance(value, int):
-        return value
-    return Runner.CORE_FINE_GRAIN
-
-def parse_perfmon_level(value):
-    alias = {
-        "LOW": "LEVEL_LOW",
-        "PERF_RECORD": "LEVEL_PERF_RECORD",
-        "PERF_PROBE_SLEEP_LOCK_D": "LEVEL_PERF_PROBE_SLEEP_LOCK_D",
-        "PERF_PROBE_SLEEP_LOCK": "LEVEL_PERF_PROBE_SLEEP_LOCK",
-        "PERF_LOCK": "LEVEL_PERF_LOCK",
-        "PERF_STAT": "LEVEL_PERF_STAT",
-    }
-    if isinstance(value, str):
-        upper = value.upper()
-        key = value if value.startswith("LEVEL_") else alias.get(upper, value)
-        if hasattr(PerfMon, key):
-            return getattr(PerfMon, key)
-        try:
-            return int(value)
-        except ValueError:
-            return PerfMon.LEVEL_LOW
-    if isinstance(value, int):
-        return value
-    return PerfMon.LEVEL_LOW
 
 def normalize_filter(entry, default_media="*"):
     if "filter" in entry:
@@ -590,22 +535,6 @@ def normalize_filter(entry, default_media="*"):
     if len(flt) != 5:
         raise ValueError("Each filter must have 5 elements: media, fs, bench, core, directio")
     return flt
-
-def expand_run_configs(raw_configs, default_core_grain, default_perfmon_level, default_media="*"):
-    expanded = []
-    for entry in raw_configs:
-        core_grain = parse_core_grain(entry.get("core_grain", default_core_grain))
-        perf_level = parse_perfmon_level(entry.get("perfmon_level", default_perfmon_level))
-        media, fs, bench, core, dio = normalize_filter(entry, default_media)
-        for m in _ensure_list(media):
-            for f in _ensure_list(fs):
-                for b in _ensure_list(bench):
-                    for c in _ensure_list(core):
-                        c_val = int(c) if isinstance(c, str) and str(c).isdigit() else c
-                        for d in _ensure_list(dio):
-                            d_val = "directio" if d is True else "bufferedio" if d is False else d
-                            expanded.append((core_grain, perf_level, (m, f, b, c_val, d_val)))
-    return expanded
 
 def apply_device_paths(cfg):
     key_map = {
@@ -678,18 +607,11 @@ def confirm_media_path():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run fxmark workloads")
     parser.add_argument(
-        "--mode",
-        choices=["ssrfs", "linux", "all"],
-        default=None,
-        help="ssrfs-only, linux-only, or both (overrides config)",
-    )
-    parser.add_argument(
         "--config",
         default=DEFAULT_CONFIG_PATH,
         help="Path to JSON configuration file",
     )
     args = parser.parse_args()
-    mode_map = {"ssrfs": 0, "linux": 1, "all": 2}
 
     try:
         with open(args.config, "r") as fd:
@@ -699,12 +621,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     apply_device_paths(cfg)
-    cfg_mode = cfg.get("mode", "ssrfs")
-    mode = mode_map[args.mode] if args.mode else mode_map.get(cfg_mode, 0)
     disk_size = _get_config_value(cfg, ["DISK_SIZE", "disk_size", "dev_size"], "32G")
     duration = _get_config_value(cfg, ["DURATION", "duration"], 5)
-    default_core_grain = parse_core_grain(cfg.get("core_grain", Runner.CORE_FINE_GRAIN))
-    default_perf_level = parse_perfmon_level(cfg.get("perfmon_level", PerfMon.LEVEL_LOW))
     raw_run_config = cfg.get("run_config", [])
     if isinstance(raw_run_config, dict):
         raw_run_config = [raw_run_config]
@@ -712,7 +630,10 @@ if __name__ == "__main__":
     try:
         if not raw_run_config:
             raise ValueError("run_config must contain at least one entry")
-        expanded_run_config = expand_run_configs(raw_run_config, default_core_grain, default_perf_level, default_media)
+        run_configs = []
+        for entry in raw_run_config:
+            flt = normalize_filter(entry, default_media)
+            run_configs.append(flt)
     except ValueError as exc:
         print(f"Invalid run_config in {args.config}: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -741,11 +662,6 @@ if __name__ == "__main__":
 
     # TODO: make it scriptable
     # confirm_media_path()
-    last_runner = None
-    for c in expanded_run_config:
-        runner = Runner(c[0], c[1], c[2], disk_size=disk_size, duration=duration)
-        runner.mode = mode
-        runner.run()
-        last_runner = runner
-    if last_runner:
-        run_plot(last_runner, plot_cfg)
+    runner = Runner(run_configs[0], disk_size=disk_size, duration=duration)
+    runner.run(run_configs)
+    run_plot(runner, plot_cfg)
