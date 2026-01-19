@@ -78,6 +78,10 @@ class Runner(object):
             "MWUM",
             "MWUL",
             "DWTL",
+            "MWDL",
+            "MWDM",
+            "MWNL",
+            "MWNM",
             # # filebench
             "filebench_varmail",
             "filebench_oltp",

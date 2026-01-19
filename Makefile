@@ -25,6 +25,8 @@ TC      = $(SRC)/MWCM.c $(SRC)/MWCL.c \
 		  $(SRC)/DRBH_bg.c $(SRC)/MRDM_bg.c \
 		  $(SRC)/DRBM_bg.c $(SRC)/MRPM_bg.c \
 		  $(SRC)/MWUM.c $(SRC)/MWUL.c \
+		  $(SRC)/MWDL.c $(SRC)/MWDM.c \
+		  $(SRC)/MWNL.c $(SRC)/MWNM.c \
 		  $(SRC)/DWTL.c $(SRC)/MRPH.c \
 		  $(SRC)/MRPL.c
 DEPS	= $(wildcard $(SRC)/*.h) $(LIBS) $(TC)
