@@ -60,6 +60,7 @@ class Runner(object):
             "xfs",
             "btrfs",
             "f2fs",
+            "f2fs_no_ck",
             "jfs",
             "reiserfs",
             "ext2",
@@ -125,6 +126,7 @@ class Runner(object):
             "xfs": self.mount_anyfs,
             "btrfs": self.mount_anyfs,
             "f2fs": self.mount_anyfs,
+            "f2fs_no_ck": self.mount_f2fs_no_ck,
             "jfs": self.mount_anyfs,
             "reiserfs": self.mount_anyfs,
         }
@@ -134,6 +136,7 @@ class Runner(object):
             "ext4": "-F -O large_dir,huge_file",
             "ext4_no_jnl": "-F",
             "f2fs": "-f",
+            "f2fs_no_ck": "-f",
             "xfs": "-f",
             "btrfs": "-f",
             "jfs": "-q",
@@ -349,6 +352,28 @@ class Runner(object):
         if p.returncode != 0:
             return False
         p = self.exec_cmd(' '.join(["sudo mount -t", fs,
+                                    dev_path, mnt_path]),
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        p = self.exec_cmd("sudo chmod 777 " + mnt_path,
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        return True
+
+    def mount_f2fs_no_ck(self, media, fs, mnt_path):
+        (rc, dev_path) = self.init_media(media)
+        if not rc:
+            return False
+
+        p = self.exec_cmd("sudo mkfs.f2fs"
+                          + " " + self.HOWTO_MKFS.get(fs, "")
+                          + " " + dev_path,
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        p = self.exec_cmd(' '.join(["sudo mount -t f2fs -o background_gc=off,checkpoint=disable ",
                                     dev_path, mnt_path]),
                           self.dev_null)
         if p.returncode != 0:
