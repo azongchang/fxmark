@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import shlex
 import sys
 import signal
 import subprocess
@@ -178,6 +179,7 @@ class Runner(object):
         self.log_path    = ""
         self.umount_hook = []
         self.active_ncore = -1
+        self.active_cpuset = None
 
     def log_start(self):
         log_subdir = getattr(Runner, "LOG_SUBDIR", None)
@@ -232,7 +234,14 @@ class Runner(object):
             ncores.append(n)
         return ncores
 
-    def exec_cmd(self, cmd, out=None):
+    def bind_cmd(self, cmd):
+        if not self.active_cpuset:
+            return cmd
+        return ' '.join(["taskset", "-c", self.active_cpuset, "sh", "-c", shlex.quote(cmd)])
+
+    def exec_cmd(self, cmd, out=None, bind=False):
+        if bind:
+            cmd = self.bind_cmd(cmd)
         p = subprocess.Popen(cmd, shell=True, stdout=out, stderr=out)
         p.wait()
         return p
@@ -256,14 +265,10 @@ class Runner(object):
             return
         self.active_ncore = ncore
         if ncore == 0:
-            ncores = "all"
+            cores = cpupol.seq_cores[:self.nhwthr]
         else:
-            ncores = ','.join(map(lambda c: str(c), cpupol.seq_cores[0:ncore]))
-        cmd = ' '.join(["sudo", 
-                        os.path.normpath(
-                            os.path.join(CUR_DIR, "set-cpus")), 
-                        ncores])
-        self.exec_cmd(cmd, self.dev_null)
+            cores = cpupol.seq_cores[0:ncore]
+        self.active_cpuset = ','.join(map(lambda c: str(c), cores))
 
     def add_bg_worker_if_needed(self, bench, ncore):
         if bench.endswith(self.BENCH_BG_SFX):
@@ -485,7 +490,7 @@ class Runner(object):
                         "--profbegin", "\"%s\"" % self.perfmon_start,
                         "--profend",   "\"%s\"" % self.perfmon_stop,
                         "--proflog", self.perfmon_log])
-        p = self.exec_cmd(cmd, self.redirect)
+        p = self.exec_cmd(cmd, self.redirect, bind=True)
         if self.redirect:
             for l in p.stdout.readlines():
                 self.log(l.decode("utf-8").strip())
