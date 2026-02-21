@@ -75,6 +75,7 @@ class Runner(object):
             "DWSL",
             "MWRL",
             "MWRM",
+            "MWRH",
             "MWCL",
             "MWCM",
             "MWUM",
