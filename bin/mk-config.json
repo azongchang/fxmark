@@ -6,12 +6,14 @@
   "duration": 5,
   "run_config": {
     "fs": [
-      "ext4",
-      "ext4_no_jnl",
-      "f2fs",
-      "f2fs_no_ck"
+      "ext4_no_jnl"
     ],
-    "bench": "*",
+    "bench": [
+      "MWDL",
+      "MWDM",
+      "MWNL",
+      "MWNM"
+    ],
     "core": "*",
     "dio": false
   },

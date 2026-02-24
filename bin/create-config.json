@@ -7,12 +7,12 @@
   "run_config": {
     "fs": [
       "ext4",
-      "ext4_no_jnl",
-      "f2fs",
-      "f2fs_no_ck"
+      "ext4_no_jnl"
     ],
-    "bench": "*",
-    "core": "*",
+    "bench": [
+      "MWCM"
+    ],
+    "core": "1",
     "dio": false
   },
   "plot": true

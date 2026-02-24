@@ -1,17 +1,20 @@
 {
-  "mode": "ssrfs",
   "dev_type": "nvme",
   "dev_path": "/dev/disk/by-id/nvme-QEMU_NVMe_Ctrl_deadbeef",
   "dev_size": "32G",
   "duration": 5,
   "run_config": {
     "fs": [
-      "ext4",
-      "ext4_no_jnl",
-      "f2fs",
-      "f2fs_no_ck"
+      "ext4"
     ],
-    "bench": "*",
+    "bench": [
+      "DRBL",
+      "DRBM",
+      "DRBH",
+      "DWOL",
+      "DWOM",
+      "DWAL"
+    ],
     "core": "*",
     "dio": false
   },
