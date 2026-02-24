@@ -28,7 +28,7 @@ static void set_test_file(struct worker *worker,
 			  uint64_t file_id, char *test_file)
 {
 	struct fx_opt *fx_opt = fx_opt_worker(worker);
-	sprintf(test_file, "%s/n_dir_ins-%d-%" PRIu64 ".dat",
+	sprintf(test_file, "%s/n_rename_ops-%d-%" PRIu64 ".dat",
 		fx_opt->root, worker->id, file_id);
 }
 
@@ -36,7 +36,7 @@ static void set_renamed_test_file(struct worker *worker,
 				  uint64_t file_id, char *test_file)
 {
 	struct fx_opt *fx_opt = fx_opt_worker(worker);
-	sprintf(test_file, "%s/n_dir_ins-%d-%" PRIu64 "renamed.dat",
+	sprintf(test_file, "%s/n_rename_ops-%d-%" PRIu64 "renamed.dat",
 		fx_opt->root, worker->id, file_id);
 }
 
