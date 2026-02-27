@@ -32,12 +32,10 @@ static int main_work(struct worker *worker)
 	for (iter = 0; !bench->stop; ++iter) {
 		char file[PATH_MAX];
 		int fd;
-		/* create, write, and close */
+		/* create and close */
 		snprintf(file, PATH_MAX, "%s/m_file_cr-%d-%" PRIu64 ".dat", 
 			 fx_opt->root, worker->id, iter);
 		if ((fd = open(file, O_CREAT | O_RDWR, S_IRWXU)) == -1)
-			goto err_out;
-	        if (write(fd, page, sizeof(page)) == -1)
 			goto err_out;
 		close(fd);
 	}
