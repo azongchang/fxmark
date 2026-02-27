@@ -119,6 +119,20 @@ class Runner(object):
         self.PERFMN_NAME    = "perfmon.py"
 
         # fs config
+        self.MOUNT_OPTS = {
+            "tmpfs": "",
+            "ext2": "",
+            "ext3": "",
+            "ext4": "",
+            "ext4_no_jnl": "",
+            "xfs": "",
+            "btrfs": "",
+            "f2fs": "-o noinline_dentry,noinline_data",
+            "f2fs_no_ck": "-o noinline_dentry,noinline_data,background_gc=off,checkpoint=disable",
+            "jfs": "",
+            "reiserfs": "",
+
+        }
         self.HOWTO_MOUNT = {
             "tmpfs": self.mount_tmpfs,
             "ext2": self.mount_anyfs,
@@ -128,7 +142,7 @@ class Runner(object):
             "xfs": self.mount_anyfs,
             "btrfs": self.mount_anyfs,
             "f2fs": self.mount_anyfs,
-            "f2fs_no_ck": self.mount_f2fs_no_ck,
+            "f2fs_no_ck": self.mount_anyfs,
             "jfs": self.mount_anyfs,
             "reiserfs": self.mount_anyfs,
         }
@@ -136,9 +150,9 @@ class Runner(object):
             "ext2": "-F",
             "ext3": "-F",
             "ext4": "-F -O large_dir,huge_file",
-            "ext4_no_jnl": "-F",
-            "f2fs": "-f",
-            "f2fs_no_ck": "-f",
+            "ext4_no_jnl": "-F -O large_dir,huge_file",
+            "f2fs": "-f -O extra_attr,inode_checksum,flexible_inline_xattr",
+            "f2fs_no_ck": "-f -O extra_attr,inode_checksum,flexible_inline_xattr",
             "xfs": "-f",
             "btrfs": "-f",
             "jfs": "-q",
@@ -351,36 +365,17 @@ class Runner(object):
         if not rc:
             return False
 
-        p = self.exec_cmd("sudo mkfs." + fs
+        actual_fs = fs
+        if fs.startswith("f2fs"):
+            actual_fs = "f2fs"
+
+        p = self.exec_cmd("sudo mkfs." + actual_fs
                           + " " + self.HOWTO_MKFS.get(fs, "")
                           + " " + dev_path,
                           self.dev_null)
         if p.returncode != 0:
             return False
-        p = self.exec_cmd(' '.join(["sudo mount -t", fs,
-                                    dev_path, mnt_path]),
-                          self.dev_null)
-        if p.returncode != 0:
-            return False
-        p = self.exec_cmd("sudo chmod 777 " + mnt_path,
-                          self.dev_null)
-        if p.returncode != 0:
-            return False
-        return True
-
-    def mount_f2fs_no_ck(self, media, fs, mnt_path):
-        (rc, dev_path) = self.init_media(media)
-        if not rc:
-            return False
-
-        p = self.exec_cmd("sudo mkfs.f2fs"
-                          + " " + self.HOWTO_MKFS.get(fs, "")
-                          + " " + dev_path,
-                          self.dev_null)
-        if p.returncode != 0:
-            return False
-        p = self.exec_cmd(' '.join(["sudo mount -t f2fs -o background_gc=off,checkpoint=disable ",
-                                    dev_path, mnt_path]),
+        p = self.exec_cmd(' '.join(["sudo mount -t", actual_fs, self.MOUNT_OPTS.get(fs, ""), dev_path, mnt_path]),
                           self.dev_null)
         if p.returncode != 0:
             return False
@@ -406,7 +401,8 @@ class Runner(object):
         if p.returncode != 0:
             return False
         p = self.exec_cmd(' '.join(["sudo mount -t ext4",
-                                    dev_path, mnt_path]),
+                        self.MOUNT_OPTS.get(fs, ""),
+                        dev_path, mnt_path]),
                           self.dev_null)
         if p.returncode != 0:
             return False
