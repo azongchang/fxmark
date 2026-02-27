@@ -13,7 +13,7 @@ from os.path import join
 from perfmon import PerfMon
 
 CUR_DIR = os.path.abspath(os.path.dirname(__file__))
-DEFAULT_CONFIG_PATH = os.path.join(CUR_DIR, "run-config.json")
+DEFAULT_CONFIG_PATH = os.path.join(CUR_DIR, "../workloads/full-eval.json")
 
 try:
     import cpupol
@@ -40,17 +40,17 @@ class Runner(object):
 
     def __init__(self, \
                  run_filter = ("*", "*", "*", "*", "*"), \
-                 disk_size = "32G", \
+                 disk_size = None, \
                  duration = 5):
         # run config
         self.CORE_GRAIN    = Runner.CORE_FINE_GRAIN
-        self.PERFMON_LEVEL = PerfMon.LEVEL_LOW
+        self.PERFMON_LEVEL = -1
         self.FILTER        = run_filter # media, fs, bench, ncore, directio
         self.DRYRUN        = False
         self.DEBUG_OUT     = False
 
         # bench config
-        self.DISK_SIZE     = disk_size
+        self.DISK_SIZE     = str(disk_size) if disk_size else ""
         self.DURATION = duration  # seconds
         self.DIRECTIOS     = ["bufferedio", "directio"]  # enable directio except tmpfs -> nodirectio 
         self.MEDIA_TYPES = ["ssd", "hdd", "nvme", "mem"]
@@ -123,12 +123,12 @@ class Runner(object):
             "tmpfs": "",
             "ext2": "",
             "ext3": "",
-            "ext4": "",
-            "ext4_no_jnl": "",
+            "ext4": "-o noquota",
+            "ext4_no_jnl": "-o noquota",
             "xfs": "",
             "btrfs": "",
-            "f2fs": "-o noinline_dentry,noinline_data",
-            "f2fs_no_ck": "-o noinline_dentry,noinline_data,background_gc=off,checkpoint=disable",
+            "f2fs": "-o noinline_dentry,noinline_data,noquota",
+            "f2fs_no_ck": "-o noinline_dentry,noinline_data,background_gc=off,checkpoint=disable,noquota",
             "jfs": "",
             "reiserfs": "",
 
@@ -195,11 +195,14 @@ class Runner(object):
         self.umount_hook = []
         self.active_ncore = -1
         self.active_cpuset = None
+        self.ssrfs_enabled = False
 
     def log_start(self):
         log_subdir = getattr(Runner, "LOG_SUBDIR", None)
         if not log_subdir:
             log_subdir = str(datetime.datetime.now()).replace(' ','-').replace(':','-')
+        if self.ssrfs_enabled and not str(log_subdir).endswith("-ssrfs"):
+            log_subdir = str(log_subdir) + "-ssrfs"
         self.log_dir = os.path.normpath(
             os.path.join(CUR_DIR, self.LOGD_NAME, log_subdir))
         self.log_path = os.path.normpath(os.path.join(self.log_dir, "fxmark.log"))
@@ -211,7 +214,7 @@ class Runner(object):
         if self.redirect:
             for l in p.stdout.readlines():
                 self.log(l.decode("utf-8").strip())
-        self.log("### DISK_SIZE      = %s"   % self.DISK_SIZE)
+        self.log("### DISK_SIZE      = %s"   % (self.DISK_SIZE if self.DISK_SIZE else "unlimited"))
         self.log("### DURATION       = %ss"  % self.DURATION)
         self.log("### DIRECTIO       = %s"   % ','.join(self.DIRECTIOS))
         self.log("### MEDIA_TYPES    = %s"   % ','.join(self.MEDIA_TYPES))
@@ -355,8 +358,11 @@ class Runner(object):
         return (rc, dev_path)
 
     def mount_tmpfs(self, media, fs, mnt_path):
-        p = self.exec_cmd("sudo mount -t tmpfs -o mode=0777,size="
-                          + self.DISK_SIZE + " none " + mnt_path,
+        mount_opts = "mode=0777"
+        if self.DISK_SIZE:
+            mount_opts += ",size=" + self.DISK_SIZE
+        p = self.exec_cmd("sudo mount -t tmpfs -o "
+                          + mount_opts + " none " + mnt_path,
                           self.dev_null)
         return p.returncode == 0
 
@@ -507,6 +513,7 @@ class Runner(object):
                 ssrfs_enabled = fd.read().strip() not in ("", "0")
         except OSError:
             ssrfs_enabled = False
+        self.ssrfs_enabled = ssrfs_enabled
         try:
             for flt in configs:
                 self.FILTER = flt
@@ -652,7 +659,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     apply_device_paths(cfg)
-    disk_size = _get_config_value(cfg, ["DISK_SIZE", "disk_size", "dev_size"], "32G")
+    disk_size = _get_config_value(cfg, ["DISK_SIZE", "disk_size", "dev_size"], None)
     duration = _get_config_value(cfg, ["DURATION", "duration"], 5)
     raw_run_config = cfg.get("run_config", [])
     if isinstance(raw_run_config, dict):
@@ -670,8 +677,16 @@ if __name__ == "__main__":
         sys.exit(1)
     plot_cfg = cfg.get("plot", None)
 
-    # use a single timestamped log folder/file for all run_config entries in this invocation
-    Runner.LOG_SUBDIR = str(datetime.datetime.now()).replace(' ','-').replace(':','-')
+    # use configured log directory name when provided, otherwise fallback to timestamp
+    log_subdir = _get_config_value(
+        cfg,
+        ["LOG_SUBDIR", "log_subdir", "log_dir", "log_dir_name"],
+        None,
+    )
+    if log_subdir:
+        Runner.LOG_SUBDIR = str(log_subdir)
+    else:
+        Runner.LOG_SUBDIR = str(datetime.datetime.now()).replace(' ','-').replace(':','-')
 
     # config parameters
     # -----------------
