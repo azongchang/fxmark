@@ -101,12 +101,12 @@ class Runner(object):
             "DRBM",
             "DRBL",
             # read/write
-            "MRPM_bg",
-            "DRBM_bg",
-            "MRDM_bg",
-            "DRBH_bg",
-            "DRBL_bg",
-            "MRDL_bg",
+            # "MRPM_bg",
+            # "DRBM_bg",
+            # "MRDM_bg",
+            # "DRBH_bg",
+            # "DRBL_bg",
+            # "MRDL_bg",
         ]
         self.BENCH_BG_SFX   = "_bg"
 
@@ -524,7 +524,7 @@ class Runner(object):
                         (ncore, nbg) = self.add_bg_worker_if_needed(bench, ncore)
                         nfg = ncore - nbg
 
-                        log_fs = fs + "s" if ssrfs_enabled else fs
+                        log_fs = fs + "-ssrfs" if ssrfs_enabled else fs
                         if self.DRYRUN:
                             self.log("## %s:%s:%s:%s:%s" % (media, log_fs, bench, nfg, dio))
                             continue
