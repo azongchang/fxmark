@@ -1,0 +1,19 @@
+{
+  "dev_type": "nvme",
+  "log_subdir": "single-eval",
+  "duration": 3,
+  "run_config": {
+    "fs": [
+      "ext4",
+      "ext4_no_jnl",
+      "f2fs",
+      "f2fs_no_ck"
+    ],
+    "bench": [
+      "MWCM"
+    ],
+    "core": "48",
+    "dio": false
+  },
+  "plot": true
+}

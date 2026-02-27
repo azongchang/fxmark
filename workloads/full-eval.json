@@ -1,0 +1,17 @@
+{
+  "dev_type": "nvme",
+  "log_subdir": "full-eval",
+  "duration": 3,
+  "run_config": {
+    "fs": [
+      "ext4",
+      "ext4_no_jnl",
+      "f2fs",
+      "f2fs_no_ck"
+    ],
+    "bench": "*",
+    "core": "*",
+    "dio": false
+  },
+  "plot": true
+}
