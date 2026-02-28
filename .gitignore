@@ -14,3 +14,4 @@ bin/root
 bin/.tmp
 logs/
 plot/
+workloads/
