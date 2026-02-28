@@ -109,8 +109,10 @@ static void worker_main(void *arg)
 			while (!w->ready)
 				nop_pause();
 		}
-		/* make things more deterministic */
-		sync();
+		/*
+		 * run-fxmark already syncs and drops caches before invoking
+		 * fxmark. Avoid a global sync() here to prevent long stalls.
+		 */
 
 		/* start performance profiling */
 		if (bench->profile_start_cmd[0])
