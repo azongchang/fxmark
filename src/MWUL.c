@@ -18,6 +18,8 @@
 #include "util.h"
 #include "rdtsc.h"
 
+#define MWUL_FILES_PER_WORKER 1000000ULL
+
 static void set_test_root(struct worker *worker, char *test_root) {
     struct fx_opt *fx_opt = fx_opt_worker(worker);
     sprintf(test_root, "%s/%d", fx_opt->root, worker->id);
@@ -36,9 +38,7 @@ static int pre_work(struct worker *worker)
     struct bench *bench =  worker->bench;
     char path[PATH_MAX];
     int fd, rc = 0;
-
-    int num_files = 20000000 / bench->ncpu < 2000000 ? 20000000 / bench->ncpu :
-						       2000000;
+    const uint64_t num_files = MWUL_FILES_PER_WORKER;
 
     /* creating private directory */
     set_test_root(worker, path);
@@ -51,7 +51,6 @@ static int pre_work(struct worker *worker)
         set_test_file(worker, worker->private[0], path);
         if ((fd = open(path, O_CREAT | O_RDWR, S_IRWXU)) == -1) {
             if (errno == ENOSPC) {
-                --worker->private[0];
 		rc = 0;
                 goto out;
             }
@@ -60,7 +59,6 @@ static int pre_work(struct worker *worker)
         }
         close(fd);
     }
-    --worker->private[0];
     goto out;
  err_out:
     bench->stop = 1;

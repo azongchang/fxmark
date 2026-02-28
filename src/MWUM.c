@@ -18,6 +18,8 @@
 #include "util.h"
 #include "rdtsc.h"
 
+#define MWUM_TOTAL_FILES 1000000ULL
+
 static void set_test_file(struct worker *worker, uint64_t file_id,
 			  char *test_file)
 {
@@ -29,18 +31,18 @@ static void set_test_file(struct worker *worker, uint64_t file_id,
 static int pre_work(struct worker *worker)
 {
 	struct bench *bench = worker->bench;
+	const uint64_t worker_idx = (uint64_t)(worker - bench->workers);
+	const uint64_t base_num_files = MWUM_TOTAL_FILES / bench->ncpu;
+	const uint64_t extra_num_files = worker_idx < (MWUM_TOTAL_FILES % bench->ncpu);
+	const uint64_t num_files = base_num_files + extra_num_files;
 	char path[PATH_MAX];
 	int fd, rc = 0;
-
-	int num_files = 20000000 / bench->ncpu < 2000000 ?
-			20000000 / bench->ncpu : 2000000;
 
 	/* time to create files */
 	for (; worker->private[0] < num_files; ++worker->private[0]) {
 		set_test_file(worker, worker->private[0], path);
 		if ((fd = open(path, O_CREAT | O_RDWR, S_IRWXU)) == -1) {
 			if (errno == ENOSPC) {
-				--worker->private[0];
 				rc = 0;
 				goto out;
 			}
@@ -49,7 +51,6 @@ static int pre_work(struct worker *worker)
 		}
 		close(fd);
 	}
-	--worker->private[0];
 	goto out;
 err_out:
 	bench->stop = 1;
