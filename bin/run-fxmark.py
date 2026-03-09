@@ -13,7 +13,16 @@ from os.path import join
 from perfmon import PerfMon
 
 CUR_DIR = os.path.abspath(os.path.dirname(__file__))
-DEFAULT_CONFIG_PATH = os.path.join(CUR_DIR, "../workloads/full-eval.json")
+SSRFS_ROOT_DIR = os.environ.get("SSRFS_ROOT_DIR")
+if not SSRFS_ROOT_DIR:
+    print("Source utils/scripts/env.sh first (for example: 'source utils/scripts/env.sh').")
+    exit(1)
+SSRFS_MOUNT_POINT = os.environ.get("SSRFS_MOUNT_POINT")
+if not SSRFS_MOUNT_POINT:
+    print("SSRFS_MOUNT_POINT is not set. Source utils/scripts/env.sh first.", file=sys.stderr)
+    exit(1)
+DEFAULT_CONFIG_PATH = os.path.join(SSRFS_ROOT_DIR, "workloads/full-eval.json")
+VALID_MEDIA_TYPES = frozenset(("mem", "nvme", "ssd", "hdd"))
 
 try:
     import cpupol
@@ -111,28 +120,13 @@ class Runner(object):
         self.BENCH_BG_SFX   = "_bg"
 
         # path config
-        self.ROOT_NAME      = "root"
-        self.LOGD_NAME      = "../logs"
+        self.LOGD_NAME      = os.environ.get("SSRFS_LOG_DIR")
         self.FXMARK_NAME    = "fxmark"
         self.FILEBENCH_NAME = "run-filebench.py"
         self.DBENCH_NAME    = "run-dbench.py"
         self.PERFMN_NAME    = "perfmon.py"
 
         # fs config
-        self.MOUNT_OPTS = {
-            "tmpfs": "",
-            "ext2": "",
-            "ext3": "",
-            "ext4": "-o noquota",
-            "ext4_no_jnl": "-o noquota",
-            "xfs": "",
-            "btrfs": "",
-            "f2fs": "-o noinline_dentry,noinline_data,noquota",
-            "f2fs_no_ck": "-o noinline_dentry,noinline_data,background_gc=off,checkpoint=disable,noquota",
-            "jfs": "",
-            "reiserfs": "",
-
-        }
         self.HOWTO_MOUNT = {
             "tmpfs": self.mount_tmpfs,
             "ext2": self.mount_anyfs,
@@ -151,7 +145,7 @@ class Runner(object):
             "ext3": "-F",
             "ext4": "-F -O large_dir,huge_file",
             "ext4_no_jnl": "-F -O large_dir,huge_file",
-            "f2fs": "-f -O extra_attr,inode_checksum,flexible_inline_xattr",
+            "f2fs": "-f",
             "f2fs_no_ck": "-f -O extra_attr,inode_checksum,flexible_inline_xattr",
             "xfs": "-f",
             "btrfs": "-f",
@@ -173,8 +167,7 @@ class Runner(object):
         self.npcpu       = cpupol.PHYSICAL_CHIPS * cpupol.CORE_PER_CHIP
         self.nhwthr      = self.npcpu * cpupol.SMT_LEVEL
         self.ncores      = self.get_ncores()
-        self.test_root   = os.path.normpath(
-            os.path.join(CUR_DIR, self.ROOT_NAME))
+        self.test_root   = os.path.normpath(SSRFS_MOUNT_POINT)
         self.fxmark_path = os.path.normpath(
             os.path.join(CUR_DIR, self.FXMARK_NAME))
         self.filebench_path = os.path.normpath(
@@ -381,7 +374,7 @@ class Runner(object):
                           self.dev_null)
         if p.returncode != 0:
             return False
-        p = self.exec_cmd(' '.join(["sudo mount -t", actual_fs, self.MOUNT_OPTS.get(fs, ""), dev_path, mnt_path]),
+        p = self.exec_cmd(' '.join(["sudo mount -t", actual_fs, " ", dev_path, mnt_path]),
                           self.dev_null)
         if p.returncode != 0:
             return False
@@ -407,7 +400,7 @@ class Runner(object):
         if p.returncode != 0:
             return False
         p = self.exec_cmd(' '.join(["sudo mount -t ext4",
-                        self.MOUNT_OPTS.get(fs, ""),
+                        " ",
                         dev_path, mnt_path]),
                           self.dev_null)
         if p.returncode != 0:
@@ -556,9 +549,27 @@ def _get_config_value(cfg, keys, default=None):
             return cfg[k]
     return default
 
-def normalize_filter(entry, default_media="*"):
+def _get_env_value(keys, default=None):
+    for key in keys:
+        value = os.environ.get(key)
+        if value is not None and value != "":
+            return value
+    return default
+
+def _normalize_env_media(media):
+    if media is None:
+        return None
+    normalized = str(media).strip().lower()
+    if not normalized:
+        return None
+    if normalized not in VALID_MEDIA_TYPES:
+        allowed = ", ".join(sorted(VALID_MEDIA_TYPES))
+        raise ValueError(f"SSRFS_DEV_TYPE must be one of: {allowed}")
+    return normalized
+
+def normalize_filter(entry, default_media="*", forced_media=None):
     if "filter" in entry:
-        flt = entry["filter"]
+        flt = list(entry["filter"])
     else:
         directio = entry.get("directio", entry.get("dio", "*"))
         if isinstance(directio, bool):
@@ -572,7 +583,9 @@ def normalize_filter(entry, default_media="*"):
         ]
     if len(flt) != 5:
         raise ValueError("Each filter must have 5 elements: media, fs, bench, core, directio")
-    return flt
+    if forced_media:
+        flt[0] = forced_media
+    return tuple(flt)
 
 def apply_device_paths(cfg):
     key_map = {
@@ -598,6 +611,28 @@ def apply_device_paths(cfg):
         dst = type_to_key.get(dev_type)
         if dst:
             setattr(Runner, dst, cfg["dev_path"])
+
+def apply_env_device_paths(dev_type=None):
+    env_key_map = {
+        "SSRFS_LOOP_DEV": "LOOPDEV",
+        "SSRFS_NVME_DEV": "NVMEDEV",
+        "SSRFS_HDD_DEV": "HDDDEV",
+        "SSRFS_SSD_DEV": "SSDDEV",
+    }
+    env_cfg = {}
+    for env_key, runner_key in env_key_map.items():
+        value = _get_env_value([env_key])
+        if value is not None:
+            env_cfg[runner_key] = value
+    if env_cfg:
+        apply_device_paths(env_cfg)
+
+    dev_path = _get_env_value(["SSRFS_DEV_PATH"])
+    if dev_path is None:
+        return
+    if not dev_type:
+        raise ValueError("SSRFS_DEV_PATH requires SSRFS_DEV_TYPE to be set")
+    apply_device_paths({"dev_type": dev_type, "dev_path": dev_path})
 
 def run_plot(runner, plot_cfg):
     if not plot_cfg:
@@ -658,19 +693,25 @@ if __name__ == "__main__":
         print(f"Failed to load config {args.config}: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    apply_device_paths(cfg)
-    disk_size = _get_config_value(cfg, ["DISK_SIZE", "disk_size", "dev_size"], None)
+    try:
+        env_device_type = _normalize_env_media(_get_env_value(["SSRFS_DEV_TYPE"]))
+        apply_env_device_paths(env_device_type)
+    except ValueError as exc:
+        print(f"Invalid environment configuration: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    disk_size = _get_env_value(["SSRFS_DISK_SIZE"], None)
     duration = _get_config_value(cfg, ["DURATION", "duration"], 5)
     raw_run_config = cfg.get("run_config", [])
     if isinstance(raw_run_config, dict):
         raw_run_config = [raw_run_config]
-    default_media = cfg.get("dev_type", cfg.get("media", "*"))
+    default_media = env_device_type or "*"
     try:
         if not raw_run_config:
             raise ValueError("run_config must contain at least one entry")
         run_configs = []
         for entry in raw_run_config:
-            flt = normalize_filter(entry, default_media)
+            flt = normalize_filter(entry, default_media, forced_media=env_device_type)
             run_configs.append(flt)
     except ValueError as exc:
         print(f"Invalid run_config in {args.config}: {exc}", file=sys.stderr)
