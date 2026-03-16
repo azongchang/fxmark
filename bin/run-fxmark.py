@@ -199,6 +199,7 @@ class Runner(object):
         self.log_dir = os.path.normpath(
             os.path.join(CUR_DIR, self.LOGD_NAME, log_subdir))
         self.log_path = os.path.normpath(os.path.join(self.log_dir, "fxmark.log"))
+        self.exec_cmd("rm -rf" + " " + self.log_dir, self.dev_null)
         self.exec_cmd("mkdir -p " + self.log_dir, self.dev_null)
 
         log_mode = "ab" if os.path.exists(self.log_path) else "bw"
