@@ -18,7 +18,7 @@
 #include "util.h"
 #include "rdtsc.h"
 
-#define MWUM_TOTAL_FILES 3000000ULL
+#define MWUM_TOTAL_FILES 2000000ULL
 
 static void set_test_file(struct worker *worker, uint64_t file_id,
 			  char *test_file)

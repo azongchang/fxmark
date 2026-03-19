@@ -18,7 +18,7 @@
 #include "util.h"
 #include "rdtsc.h"
 
-#define MWUL_FILES_PER_WORKER 200000ULL
+#define MWUL_FILES_PER_WORKER 50000ULL
 
 static void set_test_root(struct worker *worker, char *test_root) {
     struct fx_opt *fx_opt = fx_opt_worker(worker);
