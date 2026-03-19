@@ -2,6 +2,7 @@
 #include <sys/time.h>
 #include <sched.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
@@ -30,6 +31,22 @@ static inline void nop_pause(void)
 static inline void wmb(void)
 {
         __asm__ __volatile__("sfence":::"memory");
+}
+
+/*
+ * Ensure forked workers terminate if the coordinating parent dies.
+ * The double-ppid check closes the race where parent exits between fork()
+ * and PR_SET_PDEATHSIG setup in the child.
+ */
+static void arm_parent_death_signal_or_exit(void)
+{
+        pid_t parent = getppid();
+
+        if (prctl(PR_SET_PDEATHSIG, SIGTERM) != 0)
+                return;
+
+        if (getppid() != parent)
+                _exit(1);
 }
 
 static int setaffinity(int c)
@@ -181,6 +198,7 @@ void run_bench(struct bench *bench)
 		if (p < 0)
 			bench->workers[i].ret = errno;
 		else if (!p) {
+			arm_parent_death_signal_or_exit();
 			worker_main(&bench->workers[i]);
 			exit(0);
 		}
