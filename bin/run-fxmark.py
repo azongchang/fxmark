@@ -68,6 +68,7 @@ class Runner(object):
             "ext4",
             "ext4_no_jnl",
             "xfs",
+            "xfs_no_jnl",
             "btrfs",
             "f2fs",
             "f2fs_no_ck",
@@ -134,6 +135,7 @@ class Runner(object):
             "ext4": self.mount_anyfs,
             "ext4_no_jnl": self.mount_ext4_no_jnl,
             "xfs": self.mount_anyfs,
+            "xfs_no_jnl": self.mount_xfs_no_jnl,
             "btrfs": self.mount_anyfs,
             "f2fs": self.mount_anyfs,
             "f2fs_no_ck": self.mount_anyfs,
@@ -148,6 +150,7 @@ class Runner(object):
             "f2fs": "-f",
             "f2fs_no_ck": "-f -O extra_attr,inode_checksum,flexible_inline_xattr",
             "xfs": "-f",
+            "xfs_no_jnl": "-f",
             "btrfs": "-f",
             "jfs": "-q",
             "reiserfs": "-q",
@@ -403,6 +406,27 @@ class Runner(object):
         p = self.exec_cmd(' '.join(["sudo mount -t ext4",
                         " ",
                         dev_path, mnt_path]),
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        p = self.exec_cmd("sudo chmod 777 " + mnt_path,
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        return True
+
+    def mount_xfs_no_jnl(self, media, fs, mnt_path):
+        (rc, dev_path) = self.init_media(media)
+        if not rc:
+            return False
+
+        p = self.exec_cmd("sudo mkfs.xfs"
+                          + " " + self.HOWTO_MKFS.get(fs, "")
+                          + " " + dev_path,
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        p = self.exec_cmd(' '.join(["sudo mount -t -o nojournal", "xfs", " ", dev_path, mnt_path]),
                           self.dev_null)
         if p.returncode != 0:
             return False
