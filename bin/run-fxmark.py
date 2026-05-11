@@ -314,10 +314,10 @@ class Runner(object):
                       self.dev_null)
 
     def umount(self, where):
-        # Kill any processes holding the mount point first
-        self.exec_cmd("sudo fuser -km " + where + " 2>/dev/null || true",
-                      self.dev_null)
-        # Lazy unmount to handle stubborn busy cases
+        # Lazy unmount — detaches the filesystem immediately without
+        # killing any processes.  fuser -km here would send SIGKILL to
+        # every process with a file open on this filesystem, which can
+        # include PID 1 (init) if the mount propagated to a namespace.
         self.exec_cmd("sudo umount -l " + where, self.dev_null)
         (umount_hook, self.umount_hook) = (self.umount_hook, [])
         for hook in umount_hook:
@@ -520,9 +520,7 @@ class Runner(object):
         fxmark_timeout = self.DURATION * 2 + 30
         p = self.exec_cmd(cmd, self.redirect, bind=True, timeout=fxmark_timeout)
         if p.returncode != 0:
-            self.log("# fxmark failed (rc=%d), cleaning up mount" % p.returncode)
-            self.exec_cmd("sudo fuser -km " + self.test_root + " 2>/dev/null || true",
-                          self.dev_null)
+            self.log("# fxmark failed (rc=%d)" % p.returncode)
         if self.redirect:
             for l in p.stdout.readlines():
                 self.log(l.decode("utf-8").strip())
