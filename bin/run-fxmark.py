@@ -254,11 +254,16 @@ class Runner(object):
             return cmd
         return ' '.join(["taskset", "-c", self.active_cpuset, "sh", "-c", shlex.quote(cmd)])
 
-    def exec_cmd(self, cmd, out=None, bind=False):
+    def exec_cmd(self, cmd, out=None, bind=False, timeout=None):
         if bind:
             cmd = self.bind_cmd(cmd)
         p = subprocess.Popen(cmd, shell=True, stdout=out, stderr=out)
-        p.wait()
+        try:
+            p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            print(f"# TIMEOUT ({timeout}s): {cmd}", file=sys.stderr)
+            p.kill()
+            p.wait()
         return p
 
     def keep_sudo(self):
@@ -309,10 +314,11 @@ class Runner(object):
                       self.dev_null)
 
     def umount(self, where):
-        while True:
-            p = self.exec_cmd("sudo umount " + where, self.dev_null)
-            if p.returncode != 0:
-                break
+        # Kill any processes holding the mount point first
+        self.exec_cmd("sudo fuser -km " + where + " 2>/dev/null || true",
+                      self.dev_null)
+        # Lazy unmount to handle stubborn busy cases
+        self.exec_cmd("sudo umount -l " + where, self.dev_null)
         (umount_hook, self.umount_hook) = (self.umount_hook, [])
         for hook in umount_hook:
             hook()
@@ -426,7 +432,7 @@ class Runner(object):
                           self.dev_null)
         if p.returncode != 0:
             return False
-        p = self.exec_cmd(' '.join(["sudo mount -t -o nojournal", "xfs", " ", dev_path, mnt_path]),
+        p = self.exec_cmd(' '.join(["sudo", "mount", "-o", "nojournal", "-t", "xfs", dev_path, mnt_path]),
                           self.dev_null)
         if p.returncode != 0:
             return False
@@ -511,7 +517,12 @@ class Runner(object):
                         "--profbegin", "\"%s\"" % self.perfmon_start,
                         "--profend",   "\"%s\"" % self.perfmon_stop,
                         "--proflog", self.perfmon_log])
-        p = self.exec_cmd(cmd, self.redirect, bind=True)
+        fxmark_timeout = self.DURATION * 2 + 30
+        p = self.exec_cmd(cmd, self.redirect, bind=True, timeout=fxmark_timeout)
+        if p.returncode != 0:
+            self.log("# fxmark failed (rc=%d), cleaning up mount" % p.returncode)
+            self.exec_cmd("sudo fuser -km " + self.test_root + " 2>/dev/null || true",
+                          self.dev_null)
         if self.redirect:
             for l in p.stdout.readlines():
                 self.log(l.decode("utf-8").strip())
