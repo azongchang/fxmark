@@ -99,6 +99,7 @@ static void worker_main(void *arg)
 {
         struct worker *worker = (struct worker*)arg;
         struct bench *bench = worker->bench;
+        int worker_index = worker - bench->workers;
         uint64_t s_clk = 1, s_us = 1;
         uint64_t e_clk = 0, e_us = 0;
         int err = 0;
@@ -114,7 +115,7 @@ static void worker_main(void *arg)
 
         /* wait for start signal */ 
         worker->ready = 1;
-        if (worker->id) {
+        if (worker_index) {
                 while (!bench->start)
                         nop_pause();
         }
@@ -162,7 +163,7 @@ static void worker_main(void *arg)
         e_us = usec();
 
 	/* stop performance profiling */
-        if (!worker->id && bench->profile_stop_cmd[0])
+        if (!worker_index && bench->profile_stop_cmd[0])
 		system(bench->profile_stop_cmd);
 
         /* post-work */ 
