@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <stdio.h>
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
 #include "fxmark.h"
@@ -19,6 +20,27 @@
 #include "rdtsc.h"
 
 #define MWUM_TOTAL_FILES 2000000ULL
+#define MWUM_TOTAL_FILES_ENV "FXMARK_MWUM_TOTAL_FILES"
+
+static uint64_t mwum_total_files(void)
+{
+	const char *env = getenv(MWUM_TOTAL_FILES_ENV);
+	char *endp;
+	unsigned long long total;
+
+	if (!env || !*env)
+		return MWUM_TOTAL_FILES;
+
+	errno = 0;
+	total = strtoull(env, &endp, 10);
+	if (errno || endp == env || *endp || !total) {
+		fprintf(stderr, "invalid %s=%s; using default %" PRIu64 "\n",
+			MWUM_TOTAL_FILES_ENV, env, (uint64_t)MWUM_TOTAL_FILES);
+		return MWUM_TOTAL_FILES;
+	}
+
+	return (uint64_t)total;
+}
 
 static void set_test_file(struct worker *worker, uint64_t file_id,
 			  char *test_file)
@@ -32,8 +54,9 @@ static int pre_work(struct worker *worker)
 {
 	struct bench *bench = worker->bench;
 	const uint64_t worker_idx = (uint64_t)(worker - bench->workers);
-	const uint64_t base_num_files = MWUM_TOTAL_FILES / bench->ncpu;
-	const uint64_t extra_num_files = worker_idx < (MWUM_TOTAL_FILES % bench->ncpu);
+	const uint64_t total_files = mwum_total_files();
+	const uint64_t base_num_files = total_files / bench->ncpu;
+	const uint64_t extra_num_files = worker_idx < (total_files % bench->ncpu);
 	const uint64_t num_files = base_num_files + extra_num_files;
 	char path[PATH_MAX];
 	int fd, rc = 0;
