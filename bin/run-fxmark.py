@@ -50,7 +50,8 @@ class Runner(object):
     def __init__(self, \
                  run_filter = ("*", "*", "*", "*", "*"), \
                  disk_size = None, \
-                 duration = 5):
+                 duration = 5,
+                 case_timeout = None):
         # run config
         self.CORE_GRAIN    = Runner.CORE_FINE_GRAIN
         self.PERFMON_LEVEL = -1
@@ -61,6 +62,7 @@ class Runner(object):
         # bench config
         self.DISK_SIZE     = str(disk_size) if disk_size else ""
         self.DURATION = duration  # seconds
+        self.CASE_TIMEOUT = case_timeout
         self.DIRECTIOS     = ["bufferedio", "directio"]  # enable directio except tmpfs -> nodirectio 
         self.MEDIA_TYPES = ["ssd", "hdd", "nvme", "mem"]
         self.FS_TYPES = [
@@ -192,6 +194,7 @@ class Runner(object):
         self.active_ncore = -1
         self.active_cpuset = None
         self.ssrfs_enabled = False
+        self.failures = 0
 
     def log_start(self):
         log_subdir = getattr(Runner, "LOG_SUBDIR", None)
@@ -257,13 +260,24 @@ class Runner(object):
     def exec_cmd(self, cmd, out=None, bind=False, timeout=None):
         if bind:
             cmd = self.bind_cmd(cmd)
-        p = subprocess.Popen(cmd, shell=True, stdout=out, stderr=out)
+        p = subprocess.Popen(cmd, shell=True, stdout=out, stderr=out,
+                             start_new_session=True)
         try:
             p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             print(f"# TIMEOUT ({timeout}s): {cmd}", file=sys.stderr)
-            p.kill()
-            p.wait()
+            try:
+                os.killpg(p.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                p.wait()
         return p
 
     def keep_sudo(self):
@@ -517,10 +531,13 @@ class Runner(object):
                         "--profbegin", "\"%s\"" % self.perfmon_start,
                         "--profend",   "\"%s\"" % self.perfmon_stop,
                         "--proflog", self.perfmon_log])
-        fxmark_timeout = self.DURATION * 2 + 30
+        fxmark_timeout = self.CASE_TIMEOUT
+        if fxmark_timeout is None:
+            fxmark_timeout = self.DURATION * 2 + 30
         p = self.exec_cmd(cmd, self.redirect, bind=True, timeout=fxmark_timeout)
         if p.returncode != 0:
             self.log("# fxmark failed (rc=%d)" % p.returncode)
+            self.failures += 1
         if self.redirect:
             for l in p.stdout.readlines():
                 self.log(l.decode("utf-8").strip())
@@ -562,6 +579,7 @@ class Runner(object):
                         self.prepre_work(ncore)
                         if not self.mount(media, fs, self.test_root):
                             self.log("# Fail to mount %s on %s." % (fs, media))
+                            self.failures += 1
                             continue
                         self.log("## %s:%s:%s:%s:%s" % (media, log_fs, bench, nfg, dio))
                         self.pre_work()
@@ -576,6 +594,9 @@ class Runner(object):
             self.fxmark_cleanup()
             self.umount(self.test_root)
             self.set_cpus(0)
+        if self.failures:
+            self.log("### FAILURES       = %d" % self.failures)
+        return self.failures
 
 def _get_config_value(cfg, keys, default=None):
     for k in keys:
@@ -589,6 +610,19 @@ def _get_env_value(keys, default=None):
         if value is not None and value != "":
             return value
     return default
+
+def _get_nonnegative_int(value, name):
+    if value is None or value == "":
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a non-negative integer")
+    if parsed < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    if parsed == 0:
+        return None
+    return parsed
 
 def _normalize_env_media(media):
     if media is None:
@@ -730,12 +764,26 @@ if __name__ == "__main__":
     try:
         env_device_type = _normalize_env_media(_get_env_value(["SSRFS_DEV_TYPE"]))
         apply_env_device_paths(env_device_type)
+        case_timeout = _get_nonnegative_int(
+            _get_env_value(["SSRFS_FXMARK_CASE_TIMEOUT"]),
+            "SSRFS_FXMARK_CASE_TIMEOUT",
+        )
     except ValueError as exc:
         print(f"Invalid environment configuration: {exc}", file=sys.stderr)
         sys.exit(1)
 
     disk_size = _get_env_value(["SSRFS_DISK_SIZE"], None)
     duration = _get_config_value(cfg, ["DURATION", "duration"], 5)
+    try:
+        cfg_case_timeout = _get_nonnegative_int(
+            _get_config_value(cfg, ["CASE_TIMEOUT", "case_timeout"], None),
+            "case_timeout",
+        )
+    except ValueError as exc:
+        print(f"Invalid run config: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if case_timeout is None:
+        case_timeout = cfg_case_timeout
     raw_run_config = cfg.get("run_config", [])
     if isinstance(raw_run_config, dict):
         raw_run_config = [raw_run_config]
@@ -783,6 +831,9 @@ if __name__ == "__main__":
 
     # TODO: make it scriptable
     # confirm_media_path()
-    runner = Runner(run_configs[0], disk_size=disk_size, duration=duration)
-    runner.run(run_configs)
+    runner = Runner(run_configs[0], disk_size=disk_size, duration=duration,
+                    case_timeout=case_timeout)
+    failures = runner.run(run_configs)
     run_plot(runner, plot_cfg)
+    if failures:
+        sys.exit(1)

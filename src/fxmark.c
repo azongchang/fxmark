@@ -220,5 +220,5 @@ int main(int argc, char *argv[])
 	run_bench(bench);
 	report_bench(bench, stdout);
 
-	return 0;
+	return bench_error(bench) ? 1 : 0;
 }

@@ -60,6 +60,7 @@ struct worker {
 struct bench *alloc_bench(int ncpu, int nbg);
 void run_bench(struct bench *bench);
 void report_bench(struct bench *bench, FILE *out);
+int bench_error(struct bench *bench);
 
 /* cpuinfo */
 extern const unsigned int PHYSICAL_CHIPS;

@@ -217,6 +217,16 @@ void report_bench(struct bench *bench, FILE *out)
 	char *profile_name, *profile_data;
         int i, n_fg_cpu;
 
+        for (i = 0; i < bench->ncpu; ++i) {
+                struct worker *w = &bench->workers[i];
+
+                if (!w->ret || w->ret == ENOSPC)
+                        continue;
+                fprintf(out, "# ERROR worker=%d cpu=%d ret=%d (%s)\n",
+                        i, w->id, w->ret, strerror(w->ret));
+                return;
+        }
+
         /* if report_bench is overloaded */ 
         if (bench->ops.report_bench) {
                 bench->ops.report_bench(bench, out);
@@ -255,6 +265,19 @@ void report_bench(struct bench *bench, FILE *out)
 		free(profile_name);
 	if (profile_data != empty_str)
 		free(profile_data);
+}
+
+int bench_error(struct bench *bench)
+{
+        int i;
+
+        for (i = 0; i < bench->ncpu; ++i) {
+                struct worker *w = &bench->workers[i];
+
+                if (w->ret && w->ret != ENOSPC)
+                        return w->ret;
+        }
+        return 0;
 }
 
 #pragma GCC diagnostic pop
