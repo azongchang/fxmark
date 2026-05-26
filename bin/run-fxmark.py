@@ -554,7 +554,8 @@ class Runner(object):
         ssrfs_enabled = False
         try:
             with open("/sys/module/ssrfs/parameters/ssrfs_enabled") as fd:
-                ssrfs_enabled = fd.read().strip() not in ("", "0")
+                value = fd.read().strip().lower()
+                ssrfs_enabled = value not in ("", "0", "n", "no", "false")
         except OSError:
             ssrfs_enabled = False
         self.ssrfs_enabled = ssrfs_enabled
