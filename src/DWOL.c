@@ -57,6 +57,8 @@ static int pre_work(struct worker *worker)
 
 	if (write(fd, page, PAGE_SIZE) != PAGE_SIZE)
 	  goto err_out;
+	if (fsync(fd))
+	  goto err_out;
 out:
 	/* put fd to worker's private */
 	worker->private[0] = (uint64_t)fd;
