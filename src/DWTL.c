@@ -23,6 +23,13 @@
 #include "util.h"
 #include "rdtsc.h"
 
+static volatile sig_atomic_t stop_pre_work;
+
+static void sighandler(int x)
+{
+    stop_pre_work = 1;
+}
+
 static void set_test_file(struct worker *worker,
                           char *test_file)
 {
@@ -37,6 +44,13 @@ static int pre_work(struct worker *worker)
     char path[PATH_MAX];
     int fd=-1, rc = 0;
     char *page = NULL;
+
+    stop_pre_work = 0;
+    if (signal(SIGALRM, sighandler) == SIG_ERR) {
+      rc = errno;
+      goto err_out;
+    }
+    alarm(bench->duration * 2);
 
     /* allocate data buffer aligned with pagesize*/                    
     if(posix_memalign((void **)&(worker->page), PAGE_SIZE, PAGE_SIZE)) 
@@ -56,7 +70,7 @@ static int pre_work(struct worker *worker)
     if(bench->directio && (fcntl(fd, F_SETFL, O_DIRECT)==-1)) 
       goto err_out;                                           
 
-    for(;;++worker->private[0]) {
+    for(; !stop_pre_work; ++worker->private[0]) {
       rc = write(fd, page, PAGE_SIZE);
       if (rc != PAGE_SIZE) {
         if (errno == ENOSPC) {
@@ -70,6 +84,7 @@ static int pre_work(struct worker *worker)
 err_out:
     bench->stop = 1;
  out:
+    alarm(0);
     /*put fd to worker's private*/
     worker->private[1] = (uint64_t)fd;
     free(page);
@@ -81,13 +96,16 @@ err_out:
 static int main_work(struct worker *worker)
 {
     struct bench *bench = worker->bench;
-    uint64_t iter;
+    uint64_t iter = 0;
     int fd, rc = 0;
     char path[PATH_MAX];
     set_test_file(worker, path);
 
     /*get file */
     fd = (int)worker->private[1];
+
+    if (!worker->private[0])
+      goto out;
 
     for (iter = --worker->private[0]; iter > 0 && !bench->stop; --iter) {
       if (ftruncate(fd, iter * PAGE_SIZE) == -1) {

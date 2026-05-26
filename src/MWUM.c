@@ -11,35 +11,17 @@
 #include <unistd.h>
 #include <errno.h>
 #include <signal.h>
-#include <stdlib.h>
-#include <stdio.h>
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
 #include "fxmark.h"
 #include "util.h"
 #include "rdtsc.h"
 
-#define MWUM_TOTAL_FILES 2000000ULL
-#define MWUM_TOTAL_FILES_ENV "FXMARK_MWUM_TOTAL_FILES"
+static volatile sig_atomic_t stop_pre_work;
 
-static uint64_t mwum_total_files(void)
+static void sighandler(int x)
 {
-	const char *env = getenv(MWUM_TOTAL_FILES_ENV);
-	char *endp;
-	unsigned long long total;
-
-	if (!env || !*env)
-		return MWUM_TOTAL_FILES;
-
-	errno = 0;
-	total = strtoull(env, &endp, 10);
-	if (errno || endp == env || *endp || !total) {
-		fprintf(stderr, "invalid %s=%s; using default %" PRIu64 "\n",
-			MWUM_TOTAL_FILES_ENV, env, (uint64_t)MWUM_TOTAL_FILES);
-		return MWUM_TOTAL_FILES;
-	}
-
-	return (uint64_t)total;
+	stop_pre_work = 1;
 }
 
 static void set_test_file(struct worker *worker, uint64_t file_id,
@@ -53,16 +35,17 @@ static void set_test_file(struct worker *worker, uint64_t file_id,
 static int pre_work(struct worker *worker)
 {
 	struct bench *bench = worker->bench;
-	const uint64_t worker_idx = (uint64_t)(worker - bench->workers);
-	const uint64_t total_files = mwum_total_files();
-	const uint64_t base_num_files = total_files / bench->ncpu;
-	const uint64_t extra_num_files = worker_idx < (total_files % bench->ncpu);
-	const uint64_t num_files = base_num_files + extra_num_files;
 	char path[PATH_MAX];
 	int fd, rc = 0;
 
-	/* time to create files */
-	for (; worker->private[0] < num_files; ++worker->private[0]) {
+	stop_pre_work = 0;
+	if (signal(SIGALRM, sighandler) == SIG_ERR) {
+		rc = errno;
+		goto err_out;
+	}
+	alarm(bench->duration * 2);
+
+	for (; !stop_pre_work; ++worker->private[0]) {
 		set_test_file(worker, worker->private[0], path);
 		if ((fd = open(path, O_CREAT | O_RDWR, S_IRWXU)) == -1) {
 			if (errno == ENOSPC) {
@@ -78,6 +61,7 @@ static int pre_work(struct worker *worker)
 err_out:
 	bench->stop = 1;
 out:
+	alarm(0);
 	return rc;
 }
 

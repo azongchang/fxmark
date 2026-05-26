@@ -18,7 +18,12 @@
 #include "util.h"
 #include "rdtsc.h"
 
-#define MWUL_FILES_PER_WORKER 50000ULL
+static volatile sig_atomic_t stop_pre_work;
+
+static void sighandler(int x)
+{
+    stop_pre_work = 1;
+}
 
 static void set_test_root(struct worker *worker, char *test_root) {
     struct fx_opt *fx_opt = fx_opt_worker(worker);
@@ -38,7 +43,13 @@ static int pre_work(struct worker *worker)
     struct bench *bench =  worker->bench;
     char path[PATH_MAX];
     int fd, rc = 0;
-    const uint64_t num_files = MWUL_FILES_PER_WORKER;
+
+    stop_pre_work = 0;
+    if (signal(SIGALRM, sighandler) == SIG_ERR) {
+        rc = errno;
+        goto err_out;
+    }
+    alarm(bench->duration * 2);
 
     /* creating private directory */
     set_test_root(worker, path);
@@ -46,8 +57,7 @@ static int pre_work(struct worker *worker)
     if (rc)
         goto err_out;
 
-    /* time to create files */
-    for (;worker->private[0] < num_files; ++worker->private[0]) {
+    for (; !stop_pre_work; ++worker->private[0]) {
         set_test_file(worker, worker->private[0], path);
         if ((fd = open(path, O_CREAT | O_RDWR, S_IRWXU)) == -1) {
             if (errno == ENOSPC) {
@@ -63,6 +73,7 @@ static int pre_work(struct worker *worker)
  err_out:
     bench->stop = 1;
  out:
+    alarm(0);
     return rc;
 }
 
