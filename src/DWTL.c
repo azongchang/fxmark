@@ -44,6 +44,7 @@ static int pre_work(struct worker *worker)
     char path[PATH_MAX];
     int fd=-1, rc = 0;
     char *page = NULL;
+    int mem_rc;
 
     stop_pre_work = 0;
     if (signal(SIGALRM, sighandler) == SIG_ERR) {
@@ -53,11 +54,16 @@ static int pre_work(struct worker *worker)
     alarm(bench->duration * 2);
 
     /* allocate data buffer aligned with pagesize*/                    
-    if(posix_memalign((void **)&(worker->page), PAGE_SIZE, PAGE_SIZE)) 
-      goto err_out;                                                    
+    mem_rc = posix_memalign((void **)&(worker->page), PAGE_SIZE, PAGE_SIZE);
+    if(mem_rc) {
+      rc = mem_rc;
+      goto err_out;
+    }
     page = worker->page;                                               
-    if (!page)                                                         
+    if (!page) {
+      rc = ENOMEM;
       goto err_out;                                                    
+    }
 
     /* time to create large file */
     set_test_file(worker, path);
@@ -67,8 +73,10 @@ static int pre_work(struct worker *worker)
     }
 
     /*set flag with O_DIRECT if necessary*/                   
-    if(bench->directio && (fcntl(fd, F_SETFL, O_DIRECT)==-1)) 
+    if(bench->directio && (fcntl(fd, F_SETFL, O_DIRECT)==-1)) {
+      rc = errno;
       goto err_out;                                           
+    }
 
     for(; !stop_pre_work; ++worker->private[0]) {
       rc = write(fd, page, PAGE_SIZE);
@@ -81,6 +89,8 @@ static int pre_work(struct worker *worker)
         goto err_out;
       }
     }
+    rc = 0;
+    goto out;
 err_out:
     bench->stop = 1;
  out:
