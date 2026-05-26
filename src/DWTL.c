@@ -51,7 +51,7 @@ static int pre_work(struct worker *worker)
       rc = errno;
       goto err_out;
     }
-    alarm(bench->duration * 2);
+    alarm(bench->duration * 3);
 
     /* allocate data buffer aligned with pagesize*/                    
     mem_rc = posix_memalign((void **)&(worker->page), PAGE_SIZE, PAGE_SIZE);

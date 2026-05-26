@@ -49,7 +49,7 @@ static int pre_work(struct worker *worker)
         rc = errno;
         goto err_out;
     }
-    alarm(bench->duration * 2);
+    alarm(bench->duration * 3);
 
     /* creating private directory */
     set_test_root(worker, path);

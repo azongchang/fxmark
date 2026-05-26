@@ -43,7 +43,7 @@ static int pre_work(struct worker *worker)
 		rc = errno;
 		goto err_out;
 	}
-	alarm(bench->duration * 2);
+	alarm(bench->duration * 3);
 
 	for (; !stop_pre_work; ++worker->private[0]) {
 		set_test_file(worker, worker->private[0], path);
