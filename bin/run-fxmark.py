@@ -191,6 +191,7 @@ class Runner(object):
         self.log_dir     = ""
         self.log_path    = ""
         self.umount_hook = []
+        self.active_dev_path = None
         self.active_ncore = -1
         self.active_cpuset = None
         self.ssrfs_enabled = False
@@ -328,11 +329,24 @@ class Runner(object):
                       self.dev_null)
 
     def umount(self, where):
+        if self.active_dev_path:
+            script = os.path.join(SSRFS_ROOT_DIR, "utils", "scripts", "unmount.sh")
+            if os.path.exists(script):
+                cmd = " ".join([
+                    shlex.quote(script),
+                    "--dev-path", shlex.quote(self.active_dev_path),
+                    "--mount-point", shlex.quote(where),
+                ])
+                p = self.exec_cmd(cmd, self.dev_null)
+                if p.returncode == 0:
+                    self.active_dev_path = None
+                    return
         # Lazy unmount — detaches the filesystem immediately without
         # killing any processes.  fuser -km here would send SIGKILL to
         # every process with a file open on this filesystem, which can
         # include PID 1 (init) if the mount propagated to a namespace.
         self.exec_cmd("sudo umount -l " + where, self.dev_null)
+        self.active_dev_path = None
         (umount_hook, self.umount_hook) = (self.umount_hook, [])
         for hook in umount_hook:
             hook()
@@ -463,6 +477,34 @@ class Runner(object):
 
         self.umount(mnt_path)
         self.exec_cmd("mkdir -p " + mnt_path, self.dev_null)
+        if media != "mem" and fs in ("ext4_no_jnl", "f2fs", "xfs", "xfs_no_jnl"):
+            (rc, dev_path) = self.init_media(media)
+            mkfs_script = os.path.join(SSRFS_ROOT_DIR, "utils", "scripts", "mkfs.sh")
+            mount_script = os.path.join(SSRFS_ROOT_DIR, "utils", "scripts", "mount.sh")
+            if rc and os.path.exists(mkfs_script) and os.path.exists(mount_script):
+                max_cpu = max(self.ncores) if self.ncores else self.nhwthr
+                mkfs_cmd = " ".join([
+                    shlex.quote(mkfs_script),
+                    shlex.quote(fs),
+                    "--dev-path", shlex.quote(dev_path),
+                    "--mount-point", shlex.quote(mnt_path),
+                    "--cpu-count", str(max_cpu),
+                ])
+                p = self.exec_cmd(mkfs_cmd, self.dev_null)
+                if p.returncode != 0:
+                    return False
+                mount_cmd = " ".join([
+                    shlex.quote(mount_script),
+                    shlex.quote(fs),
+                    "--dev-path", shlex.quote(dev_path),
+                    "--mount-point", shlex.quote(mnt_path),
+                    "--cpu-count", str(max_cpu),
+                ])
+                p = self.exec_cmd(mount_cmd, self.dev_null)
+                if p.returncode == 0:
+                    self.active_dev_path = dev_path
+                    return True
+                return False
         return mount_fn(media, fs, mnt_path)
 
     def _match_config(self, key1, key2):
@@ -596,7 +638,7 @@ class Runner(object):
             self.umount(self.test_root)
             self.set_cpus(0)
         if self.failures:
-            self.log("### FAILURES       = %d" % self.failures)
+            print("### FAILURES       = %d" % self.failures)
         return self.failures
 
 def _get_config_value(cfg, keys, default=None):
@@ -811,6 +853,9 @@ if __name__ == "__main__":
         Runner.LOG_SUBDIR = str(log_subdir)
     else:
         Runner.LOG_SUBDIR = str(datetime.datetime.now()).replace(' ','-').replace(':','-')
+    log_suffix = os.environ.get("SSRFS_FXMARK_LOG_SUFFIX")
+    if log_suffix:
+        Runner.LOG_SUBDIR = "-".join([Runner.LOG_SUBDIR, log_suffix])
 
     # config parameters
     # -----------------
