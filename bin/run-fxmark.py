@@ -562,7 +562,10 @@ class Runner(object):
             else: 
                 print("# INFO: DirectIO Enabled")
 
-        cmd = ' '.join([self.fxmark_env(),
+        # Benchmark binaries are executed with sudo in project eval wrappers.
+        # Keep this runner aligned so standalone run-fxmark.py does not stall on
+        # non-root execution paths.
+        cmd = ' '.join(["sudo", self.fxmark_env(),
                         bin,
                         "--type", type,
                         "--ncore", str(ncore),
