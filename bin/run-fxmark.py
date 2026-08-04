@@ -352,17 +352,26 @@ class Runner(object):
             hook()
 
     def init_mem_disk(self):
+        # If the environment already created a loop device (e.g. env.sh
+        # mem-disk init), reuse it.  /dev/loop* nodes always exist, so
+        # probe whether this one is actually attached to a backing file.
+        p = self.exec_cmd(
+            "sudo losetup -l " + Runner.LOOPDEV + " 2>/dev/null | grep -q " + Runner.LOOPDEV,
+            self.dev_null)
+        if p.returncode == 0:
+            return (True, Runner.LOOPDEV)
+
         self.unset_loopdev()
         self.umount(self.tmp_path)
         self.unset_loopdev()
         self.exec_cmd("mkdir -p " + self.tmp_path, self.dev_null)
         if not self.mount_tmpfs("mem", "tmpfs", self.tmp_path):
             return False;
-        self.exec_cmd("dd if=/dev/zero of=" 
+        self.exec_cmd("dd if=/dev/zero of="
                       + self.disk_path +  " bs=1G count=1024000",
                       self.dev_null)
         p = self.exec_cmd(' '.join(["sudo", "losetup",
-                                    Runner.LOOPDEV, self.disk_path]), 
+                                    Runner.LOOPDEV, self.disk_path]),
                           self.dev_null)
         if p.returncode == 0:
             self.umount_hook.append(self.deinit_mem_disk)
@@ -721,6 +730,7 @@ def apply_device_paths(cfg):
             "ssd": "SSDDEV",
             "hdd": "HDDDEV",
             "loop": "LOOPDEV",
+            "mem": "LOOPDEV",
         }
         dst = type_to_key.get(dev_type)
         if dst:

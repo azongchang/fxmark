@@ -10,6 +10,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <execinfo.h>
+#include <sys/wait.h>
+
 #include "bench.h"
 #include "cpupol.h"
 #include "rdtsc.h"
@@ -95,31 +98,58 @@ static void sighandler(int x)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-result"
 
+static void print_backtrace(void)
+{
+	void *buffer[128];
+	int nptrs = backtrace(buffer, 128);
+
+	fprintf(stderr,
+		"# ERROR: worker init failed -- backtrace (%d frames):\n",
+		nptrs);
+	backtrace_symbols_fd(buffer, nptrs, STDERR_FILENO);
+}
+
 static void worker_main(void *arg)
 {
-        struct worker *worker = (struct worker*)arg;
-        struct bench *bench = worker->bench;
-        int worker_index = worker - bench->workers;
-        uint64_t s_clk = 1, s_us = 1;
-        uint64_t e_clk = 0, e_us = 0;
-        int err = 0;
+	struct worker *worker = (struct worker*)arg;
+	struct bench *bench = worker->bench;
+	int worker_index = worker - bench->workers;
+	uint64_t s_clk = 1, s_us = 1;
+	uint64_t e_clk = 1, e_us = 1;
+	int err = 0;
 
-        /* set affinity */ 
-        setaffinity(worker->id);
+	/* set affinity */
+	setaffinity(worker->id);
 
-        /* pre-work */
-        if (bench->ops.pre_work) {
-                err = bench->ops.pre_work(worker);
-                if (err) goto err_out;
-        }
+	/* pre-work */
+	if (bench->ops.pre_work) {
+		err = bench->ops.pre_work(worker);
+		if (err)
+			print_backtrace();
+	}
 
-        /* wait for start signal */ 
-        worker->ready = 1;
-        if (worker_index) {
-                while (!bench->start)
-                        nop_pause();
-        }
-	else {
+	/*
+	 * Signal init completion BEFORE jumping to err_out.
+	 * This is the core deadlock fix: even on pre_work failure, the parent
+	 * sees ready == 1 and can check ret rather than spinning forever.
+	 * ret is written before ready (ordering enforced by wmb) so the parent
+	 * sees a consistent snapshot.
+	 */
+	worker->ret = err;
+	wmb();
+	worker->ready = 1;
+
+	/* skip barrier and main_work when init failed */
+	if (err) {
+		worker->clocks = 1;
+		return;
+	}
+
+	/* wait for start signal */
+	if (worker_index) {
+		while (!bench->start)
+			nop_pause();
+	} else {
 		/* are all workers ready? */
 		int i;
 		for (i = 1; i < bench->ncpu; i++) {
@@ -136,76 +166,166 @@ static void worker_main(void *arg)
 		if (bench->profile_start_cmd[0])
 			system(bench->profile_start_cmd);
 
-                /* ok, before running, set timer */
-                if (signal(SIGALRM, sighandler) == SIG_ERR) {
-                        err = errno;
-                        goto err_out;
-                }
-                running_bench = bench;
-                alarm(bench->duration);
-                bench->start = 1;
-                wmb();
-        }
-        
-        /* start time */
-        s_clk = rdtsc_beg();
-        s_us = usec();
+		/* ok, before running, set timer */
+		if (signal(SIGALRM, sighandler) == SIG_ERR) {
+			err = errno;
+			goto err_out;
+		}
+		running_bench = bench;
+		alarm(bench->duration);
+		bench->start = 1;
+		wmb();
+	}
 
-        /* main work */
-        if (bench->ops.main_work) {
-                err = bench->ops.main_work(worker);
-                if (err && err != ENOSPC)
-                        goto err_out;
-        }
+	/* start time */
+	s_clk = rdtsc_beg();
+	s_us = usec();
 
-        /* end time */ 
-        e_clk = rdtsc_end();
-        e_us = usec();
+	/* main work */
+	if (bench->ops.main_work) {
+		err = bench->ops.main_work(worker);
+		if (err && err != ENOSPC)
+			goto err_out;
+	}
+
+	/* end time */
+	e_clk = rdtsc_end();
+	e_us = usec();
 
 	/* stop performance profiling */
-        if (!worker_index && bench->profile_stop_cmd[0])
+	if (!worker_index && bench->profile_stop_cmd[0])
 		system(bench->profile_stop_cmd);
 
-        /* post-work */ 
-        if (bench->ops.post_work)
-                err = bench->ops.post_work(worker);
+	/* post-work */
+	if (bench->ops.post_work)
+		err = bench->ops.post_work(worker);
 err_out:
-        worker->ret = err;
-        worker->usecs = e_us - s_us;
-        wmb();
-        worker->clocks = e_clk - s_clk;
+	worker->ret = err;
+	worker->usecs = e_us - s_us;
+	wmb();
+	worker->clocks = e_clk - s_clk;
 }
 
-static void wait(struct bench *bench)
+static void wait_workers(struct bench *bench)
 {
-        int i;
-        for (i = 0; i < bench->ncpu; i++) {
-                struct worker *w = &bench->workers[i];
-                while (!w->clocks)
-                        nop_pause();
-        }
+	int i;
+
+	for (i = 0; i < bench->ncpu; i++) {
+		struct worker *w = &bench->workers[i];
+		while (!w->clocks)
+			nop_pause();
+	}
 }
 
 void run_bench(struct bench *bench)
 {
-        int i;
+	pid_t children[bench->ncpu];
+	int i;
+
+	for (i = 0; i < bench->ncpu; i++)
+		children[i] = -1;
+
+	/*
+	 * Fork and initialize workers one at a time (serialized init).
+	 * This avoids the fork storm that caused transient system()
+	 * failures in mkdir_p, and allows individual init-failure
+	 * reporting with backtraces.
+	 */
 	for (i = 1; i < bench->ncpu; ++i) {
-		/**
-		 * fork() is intentionally used instead of pthread
-		 * to avoid known scalability bottlenecks 
-		 * of linux virtual memory subsystem. 
-		 */ 
-		pid_t p = fork();
-		if (p < 0)
-			bench->workers[i].ret = errno;
-		else if (!p) {
+		struct worker *w = &bench->workers[i];
+		pid_t p;
+
+		p = fork();
+		if (p < 0) {
+			w->ret = errno;
+			fprintf(stderr,
+				"# ERROR: fork failed for worker %d: %s\n",
+				i, strerror(errno));
+			continue;
+		}
+
+		if (!p) {
+			/* child */
 			arm_parent_death_signal_or_exit();
-			worker_main(&bench->workers[i]);
+			worker_main(w);
 			exit(0);
 		}
+
+		/* parent: record PID and wait for init to complete */
+		children[i] = p;
+
+		{
+			int timeout_ms = 30000;
+			int crashed = 0;
+
+			while (timeout_ms > 0 && !w->ready) {
+				int status;
+				pid_t ret = waitpid(p, &status, WNOHANG);
+
+				if (ret == p) {
+					/* child terminated during init */
+					if (WIFEXITED(status))
+						fprintf(stderr,
+							"# ERROR: worker %d "
+							"exited with status %d "
+							"during init\n",
+							i, WEXITSTATUS(status));
+					else if (WIFSIGNALED(status))
+						fprintf(stderr,
+							"# ERROR: worker %d "
+							"killed by signal %d "
+							"during init\n",
+							i, WTERMSIG(status));
+					w->ret = -ECHILD;
+					w->clocks = 1;
+					crashed = 1;
+					break;
+				} else if (ret < 0) {
+					/* unexpected waitpid error */
+					break;
+				}
+				/* child still alive, keep polling */
+				usleep(10000); /* 10 ms */
+				timeout_ms -= 10;
+			}
+
+			if (!crashed && !w->ready) {
+				fprintf(stderr,
+					"# ERROR: worker %d init timed out "
+					"after 30s\n", i);
+				kill(p, SIGKILL);
+				waitpid(p, NULL, 0);
+				w->ret = -ETIMEDOUT;
+				w->clocks = 1;
+				children[i] = -1; /* already reaped */
+			}
+		}
+
+		/* Report init result */
+		if (w->ret) {
+			fprintf(stderr,
+				"# ERROR: worker %d init failed: ret=%d (%s)\n",
+				i, w->ret, strerror(abs(w->ret)));
+		}
 	}
+
+	/* Run worker 0 in the parent process */
 	worker_main(&bench->workers[0]);
-	wait(bench);
+
+	/* Wait for all workers to complete main_work (spin on clocks) */
+	wait_workers(bench);
+
+	/* Reap remaining child processes */
+	for (i = 1; i < bench->ncpu; ++i) {
+		if (children[i] > 0) {
+			int status;
+			pid_t ret;
+
+			do {
+				ret = waitpid(children[i], &status, 0);
+			} while (ret < 0 && errno == EINTR);
+		}
+	}
 }
 
 void report_bench(struct bench *bench, FILE *out)

@@ -22,12 +22,12 @@ sudo mount -t tmpfs -o mode=0777,size=1G none $TMP1
 dd if=/dev/zero of=$TMP/disk.img bs=1G count=102400
 dd if=/dev/zero of=$TMP1/disk.img bs=1G count=102400
 
-sudo losetup /dev/loop2 $TMP/disk.img
-sudo losetup /dev/loop3 $TMP1/disk.img
+LOOP2=$(sudo losetup --find --show $TMP/disk.img)
+LOOP3=$(sudo losetup --find --show $TMP1/disk.img)
 
-sudo mke2fs -O journal_dev /dev/loop3
-sudo mke2fs -t ext4 /dev/loop2
-sudo tune2fs -O ^has_journal /dev/loop2
-sudo tune2fs -o journal_data -j -J device=/dev/loop3 /dev/loop2
+sudo mke2fs -O journal_dev $LOOP3
+sudo mke2fs -t ext4 $LOOP2
+sudo tune2fs -O ^has_journal $LOOP2
+sudo tune2fs -o journal_data -j -J device=$LOOP3 $LOOP2
 
-sudo mount -t ext4 /dev/loop2 $EXT4
+sudo mount -t ext4 $LOOP2 $EXT4

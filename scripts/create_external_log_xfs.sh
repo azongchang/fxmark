@@ -22,9 +22,9 @@ sudo mount -t tmpfs -o mode=0777,size=1G none $TMP1
 dd if=/dev/zero of=$TMP/disk.img bs=1G count=102400
 dd if=/dev/zero of=$TMP1/disk.img bs=1G count=102400
 
-sudo losetup /dev/loop2 $TMP/disk.img
-sudo losetup /dev/loop3 $TMP1/disk.img
+LOOP2=$(sudo losetup --find --show $TMP/disk.img)
+LOOP3=$(sudo losetup --find --show $TMP1/disk.img)
 
-sudo mkfs.xfs -f /dev/loop2 -l logdev=/dev/loop3,size=1024m
+sudo mkfs.xfs -f $LOOP2 -l logdev=$LOOP3,size=1024m
 
-sudo mount -o logdev=/dev/loop3 /dev/loop2 $XFS 
+sudo mount -o logdev=$LOOP3 $LOOP2 $XFS

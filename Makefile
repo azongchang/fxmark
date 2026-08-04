@@ -11,7 +11,7 @@ SRC = src
 BIN = bin
 
 # cflags and source code
-CFLAGS += $(DEFS) -Wall -g -O0 -D_GNU_SOURCE
+CFLAGS += $(DEFS) -Wall -g -O0 -D_GNU_SOURCE -rdynamic
 LDFLAGS +=
 LIBS    = $(SRC)/bench.c $(SRC)/util.c
 TC      = $(SRC)/MWCM.c $(SRC)/MWCL.c \
