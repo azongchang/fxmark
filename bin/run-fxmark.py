@@ -201,7 +201,7 @@ class Runner(object):
         log_subdir = getattr(Runner, "LOG_SUBDIR", None)
         if not log_subdir:
             log_subdir = str(datetime.datetime.now()).replace(' ','-').replace(':','-')
-        if self.ssrfs_enabled and not str(log_subdir).endswith("-ssrfs"):
+        if self.ssrfs_enabled and "ssrfs" not in str(log_subdir).lower():
             log_subdir = str(log_subdir) + "-ssrfs"
         self.log_dir = os.path.normpath(
             os.path.join(CUR_DIR, self.LOGD_NAME, log_subdir))
@@ -237,6 +237,9 @@ class Runner(object):
 
     def log(self, log):
         self.log_fd.write((log+'\n').encode('utf-8'))
+        # Flush each line: a kernel hang/oops mid-run must not lose the
+        # rows already produced (they are the only record of progress).
+        self.log_fd.flush()
         print(log)
 
     def get_ncores(self):
@@ -341,10 +344,22 @@ class Runner(object):
                 if p.returncode == 0:
                     self.active_dev_path = None
                     return
-        # Lazy unmount — detaches the filesystem immediately without
-        # killing any processes.  fuser -km here would send SIGKILL to
-        # every process with a file open on this filesystem, which can
-        # include PID 1 (init) if the mount propagated to a namespace.
+        # Prefer a blocking umount so the filesystem fully tears down
+        # (including SSRFS flush-on-teardown) before the next case
+        # mkfs's the same device.  Bounded by timeout in case a dead
+        # filesystem wedges the mount.
+        p = self.exec_cmd("sudo timeout 60 umount " + where, self.dev_null)
+        if p.returncode == 0:
+            self.active_dev_path = None
+            (umount_hook, self.umount_hook) = (self.umount_hook, [])
+            for hook in umount_hook:
+                hook()
+            return
+        # Lazy unmount fallback — detaches the filesystem immediately
+        # without killing any processes.  fuser -km here would send
+        # SIGKILL to every process with a file open on this filesystem,
+        # which can include PID 1 (init) if the mount propagated to a
+        # namespace.
         self.exec_cmd("sudo umount -l " + where, self.dev_null)
         self.active_dev_path = None
         (umount_hook, self.umount_hook) = (self.umount_hook, [])
@@ -352,15 +367,37 @@ class Runner(object):
             hook()
 
     def init_mem_disk(self):
-        # If the environment already created a loop device (e.g. env.sh
-        # mem-disk init), reuse it.  /dev/loop* nodes always exist, so
-        # probe whether this one is actually attached to a backing file.
+        # Prefer the harness-provided memory disk: env.sh attaches a
+        # tmpfs-backed loop device and exports SSRFS_DEV_PATH when
+        # SSRFS_DEV_TYPE=mem.  Reuse it verbatim so every case mkfs's the
+        # same device the rest of the harness uses.  A bare /dev/loopN
+        # node alone is not enough: a stale path may name a detached loop
+        # device (mkfs on it fails with "Device size reported to be
+        # zero"), so verify the device reports a nonzero size.
+        env_dev = os.environ.get("SSRFS_DEV_PATH")
+        if env_dev and os.path.exists(env_dev):
+            size = None
+            try:
+                with open("/sys/block/%s/size" %
+                          os.path.basename(env_dev.rstrip('/'))) as fd:
+                    size = fd.read().strip()
+            except OSError:
+                size = None
+            if size and size != "0":
+                return (True, env_dev)
+            print("# INFO: SSRFS_DEV_PATH=%s is not attached; "
+                  "creating local memdisk" % env_dev)
+
+        # Legacy standalone path: reuse the harness loop device when one
+        # is already attached (/dev/loop* nodes always exist, so probe
+        # whether this one actually has a backing file)...
         p = self.exec_cmd(
             "sudo losetup -l " + Runner.LOOPDEV + " 2>/dev/null | grep -q " + Runner.LOOPDEV,
             self.dev_null)
         if p.returncode == 0:
             return (True, Runner.LOOPDEV)
 
+        # ...otherwise create a sparse 40G image on tmpfs.
         self.unset_loopdev()
         self.umount(self.tmp_path)
         self.unset_loopdev()
@@ -368,7 +405,7 @@ class Runner(object):
         if not self.mount_tmpfs("mem", "tmpfs", self.tmp_path):
             return False;
         self.exec_cmd("dd if=/dev/zero of="
-                      + self.disk_path +  " bs=1G count=1024000",
+                      + self.disk_path +  " bs=1M count=0 seek=40960",
                       self.dev_null)
         p = self.exec_cmd(' '.join(["sudo", "losetup",
                                     Runner.LOOPDEV, self.disk_path]),
