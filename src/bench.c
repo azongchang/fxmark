@@ -141,6 +141,25 @@ static void worker_main(void *arg)
 
 	/* skip barrier and main_work when init failed */
 	if (err) {
+		/*
+		 * Worker 0 runs in the master process.  If its init fails
+		 * it must still release the sibling workers from the start
+		 * spin: without this, run_bench spins in wait_workers while
+		 * every child spins on !bench->start forever (observed:
+		 * DWTL hanging 40+ min with the master in wait_workers and
+		 * the children in the bench.c:150 spin — indistinguishable
+		 * from a kernel hang, and no init-failure message is ever
+		 * printed for worker 0).  The children then run main_work
+		 * against an unprepared tree and the case fails with the
+		 * real error visible in worker 0's ret.
+		 */
+		if (!worker_index) {
+			fprintf(stderr,
+				"# ERROR: worker 0 init failed: ret=%d (%s)\n",
+				err, strerror(err));
+			bench->start = 1;
+			wmb();
+		}
 		worker->clocks = 1;
 		return;
 	}
