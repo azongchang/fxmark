@@ -78,9 +78,24 @@ static int pre_work(struct worker *worker)
       goto err_out;                                           
     }
 
-    for(; !stop_pre_work; ++worker->private[0]) {
+    /* Serialized init gives each worker the full 21s write window, so
+     * the aggregate file size would fill the device long before the
+     * last worker (the master) runs: its open() then fails ENOSPC and
+     * the whole case reports zero works.  Cap the file at 4GB (1M
+     * pages) per worker — 48 workers x 4GB = 192GB, well under the
+     * 372G SSD — while still giving ftruncate() plenty of shrink
+     * steps for the 7s measure window. */
+    for(; !stop_pre_work && worker->private[0] < (1 << 20);
+        ++worker->private[0]) {
       rc = write(fd, page, PAGE_SIZE);
       if (rc != PAGE_SIZE) {
+        /* The pre_work alarm fires mid-write: the interrupted write
+         * returns EINTR.  That is the designed end of pre_work, not an
+         * error — treat it like the ENOSPC stop below. */
+        if (errno == EINTR && stop_pre_work) {
+          rc = 0;
+          goto out;
+        }
         if (errno == ENOSPC) {
           --worker->private[0];
           rc = 0;
