@@ -85,22 +85,28 @@ static int pre_work(struct worker *worker)
      * pages) per worker — 48 workers x 4GB = 192GB, well under the
      * 372G SSD — while still giving ftruncate() plenty of shrink
      * steps for the 7s measure window. */
-    for(; !stop_pre_work && worker->private[0] < (1 << 20);
+    for(; !stop_pre_work && worker->private[0] < (1ULL << 20);
         ++worker->private[0]) {
       rc = write(fd, page, PAGE_SIZE);
       if (rc != PAGE_SIZE) {
         /* The pre_work alarm fires mid-write: the interrupted write
          * returns EINTR.  That is the designed end of pre_work, not an
          * error — treat it like the ENOSPC stop below. */
-        if (errno == EINTR && stop_pre_work) {
+        if (rc < 0 && errno == EINTR && stop_pre_work) {
           rc = 0;
           goto out;
         }
-        if (errno == ENOSPC) {
-          --worker->private[0];
+        if (rc < 0 && errno == ENOSPC) {
+          /* The loop counter is the number of completed pages.  Do not
+           * decrement it: an ENOSPC write did not advance the counter,
+           * and decrementing from zero wraps the uint64_t value. */
           rc = 0;
           goto out;
         }
+        if (rc >= 0)
+          rc = EIO;
+        else
+          rc = errno;
         goto err_out;
       }
     }
@@ -149,6 +155,7 @@ static int main_work(struct worker *worker)
 }
 
 struct bench_operations u_file_tr_ops = {
+    .parallel_pre_work = 1,
     .pre_work  = pre_work,
     .main_work = main_work,
 };

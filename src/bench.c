@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <sys/time.h>
+#include <time.h>
 #include <sched.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
@@ -24,6 +25,13 @@ static uint64_t usec(void)
         struct timeval tv;
         gettimeofday(&tv, 0);
         return (uint64_t)tv.tv_sec * 1000000 + tv.tv_usec;
+}
+
+static uint64_t monotonic_usec(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
 
 static inline void nop_pause(void)
@@ -153,7 +161,7 @@ static void worker_main(void *arg)
 		 * against an unprepared tree and the case fails with the
 		 * real error visible in worker 0's ret.
 		 */
-		if (!worker_index) {
+		if (!worker_index && !bench->parallel_init) {
 			fprintf(stderr,
 				"# ERROR: worker 0 init failed: ret=%d (%s)\n",
 				err, strerror(err));
@@ -165,9 +173,9 @@ static void worker_main(void *arg)
 	}
 
 	/* wait for start signal */
-	if (worker_index) {
+	if (worker_index || bench->parallel_init) {
 		while (!bench->start)
-			nop_pause();
+			usleep(1000);
 	} else {
 		/* are all workers ready? */
 		int i;
@@ -197,6 +205,10 @@ static void worker_main(void *arg)
 	}
 
 	/* start time */
+	if (bench->parallel_init && bench->stop) {
+		worker->clocks = 1;
+		return;
+	}
 	s_clk = rdtsc_beg();
 	s_us = usec();
 
@@ -212,7 +224,7 @@ static void worker_main(void *arg)
 	e_us = usec();
 
 	/* stop performance profiling */
-	if (!worker_index && bench->profile_stop_cmd[0])
+	if (!bench->parallel_init && !worker_index && bench->profile_stop_cmd[0])
 		system(bench->profile_stop_cmd);
 
 	/* post-work */
@@ -236,10 +248,131 @@ static void wait_workers(struct bench *bench)
 	}
 }
 
+/* Parent coordinates all workers, including worker 0. No measured work may
+ * start until every initializer succeeds. Sleeping barriers avoid consuming
+ * the CPUs and memory bandwidth needed by workers still preparing data. */
+static void run_bench_parallel(struct bench *bench)
+{
+	pid_t children[bench->ncpu];
+	int i, left = 0, failed = 0;
+	uint64_t begin = monotonic_usec();
+	uint64_t limit = (3ULL * bench->duration + 30) * 1000000;
+
+	for (i = 0; i < bench->ncpu; i++)
+		children[i] = -1;
+	for (i = 0; i < bench->ncpu; i++) {
+		pid_t pid = fork();
+		if (pid < 0) {
+			bench->workers[i].ret = errno;
+			failed = 1;
+			break;
+		}
+		if (!pid) {
+			arm_parent_death_signal_or_exit();
+			worker_main(&bench->workers[i]);
+			_exit(0);
+		}
+		children[i] = pid;
+		left++;
+	}
+	while (!failed) {
+		int ready = 0;
+		for (i = 0; i < bench->ncpu; i++) {
+			struct worker *w = &bench->workers[i];
+			int status;
+			pid_t ret = waitpid(children[i], &status, WNOHANG);
+			if (ret == children[i]) {
+				children[i] = -1;
+				left--;
+				if (!w->ret)
+					w->ret = ECHILD;
+			}
+			if (w->ret) {
+				failed = 1;
+				break;
+			}
+			ready += !!w->ready;
+		}
+		if (failed || ready == bench->ncpu)
+			break;
+		if (monotonic_usec() - begin > limit) {
+			for (i = 0; i < bench->ncpu; i++)
+				if (!bench->workers[i].ready)
+					bench->workers[i].ret = ETIMEDOUT;
+			failed = 1;
+			break;
+		}
+		usleep(1000);
+	}
+	fprintf(stderr, "# INIT parallel workers=%d seconds=%.6f status=%s\n",
+		bench->ncpu, (monotonic_usec() - begin) / 1000000.0,
+		failed ? "failed" : "ready");
+	if (!failed) {
+		uint64_t units = 0, minimum = UINT64_MAX, maximum = 0;
+		for (i = 0; i < bench->ncpu; i++) {
+			uint64_t n = bench->workers[i].private[0];
+			units += n;
+			if (n < minimum) minimum = n;
+			if (n > maximum) maximum = n;
+		}
+		fprintf(stderr, "# PREPARED private0_total=%llu min=%llu max=%llu\n",
+			(unsigned long long)units, (unsigned long long)minimum,
+			(unsigned long long)maximum);
+	}
+	if (!failed) {
+		if (bench->profile_start_cmd[0])
+			system(bench->profile_start_cmd);
+		running_bench = bench;
+		if (signal(SIGALRM, sighandler) == SIG_ERR) {
+			bench->workers[0].ret = errno;
+			failed = 1;
+		} else {
+			alarm(bench->duration);
+		}
+	}
+	if (failed)
+		bench->stop = 1;
+	wmb();
+	bench->start = 1;
+	while (left) {
+		for (i = 0; i < bench->ncpu; i++) {
+			int status;
+			pid_t ret;
+			if (children[i] <= 0)
+				continue;
+			if (failed)
+				kill(children[i], SIGKILL);
+			ret = waitpid(children[i], &status, WNOHANG);
+			if (ret != children[i])
+				continue;
+			children[i] = -1;
+			left--;
+			if (!WIFEXITED(status) || WEXITSTATUS(status)) {
+				if (!bench->workers[i].ret)
+					bench->workers[i].ret = ECHILD;
+				bench->stop = 1;
+			}
+		}
+		if (left)
+			usleep(1000);
+	}
+	alarm(0);
+	if (!failed && bench->profile_stop_cmd[0])
+		system(bench->profile_stop_cmd);
+}
+
 void run_bench(struct bench *bench)
 {
 	pid_t children[bench->ncpu];
 	int i;
+	const char *parallel = getenv("FXMARK_PARALLEL_INIT");
+
+	bench->parallel_init = bench->ops.parallel_pre_work &&
+		parallel && !strcmp(parallel, "1");
+	if (bench->parallel_init) {
+		run_bench_parallel(bench);
+		return;
+	}
 
 	for (i = 0; i < bench->ncpu; i++)
 		children[i] = -1;

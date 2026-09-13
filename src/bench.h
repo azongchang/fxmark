@@ -19,6 +19,8 @@ struct bench;
 struct worker;
 
 struct bench_operations {
+	/* Workers prepare disjoint data or explicitly partition a shared tree. */
+	int parallel_pre_work;
 	void (*report_bench)(struct bench *bench, FILE *out);
 	int (*pre_work)(struct worker*);
 	int (*main_work)(struct worker*);
@@ -26,6 +28,7 @@ struct bench_operations {
 };
 
 struct bench {
+	int parallel_init;
 	volatile int start;
 	volatile int stop;
 

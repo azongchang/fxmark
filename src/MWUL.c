@@ -99,6 +99,7 @@ static int main_work(struct worker *worker)
 }
 
 struct bench_operations u_file_rm_ops = {
+    .parallel_pre_work = 1,
     .pre_work  = pre_work,
     .main_work = main_work,
 };

@@ -55,15 +55,20 @@ static int pre_work(struct worker *worker)
 {
 	char path[PATH_MAX];
 	unsigned int i, j, k, l, m; 
-	int rc;
+	int rc = 0;
+	unsigned int index = worker - worker->bench->workers;
+	unsigned int stride = worker->bench->parallel_init ? worker->bench->ncpu : 1;
 
 	/* a leader takes over all pre_work() */
-	if (worker->id != 0)
+	if (!worker->bench->parallel_init && index != 0)
 		return 0;
 
 	/* create test files */
 	for (i = 0; i < BRANCHING_OUT_FACTOR; ++i) {
 		for (j = 0; j < BRANCHING_OUT_FACTOR; ++j) {
+			if (worker->bench->parallel_init &&
+			    (i * BRANCHING_OUT_FACTOR + j) % stride != index)
+				continue;
 			for (k = 0; k < BRANCHING_OUT_FACTOR; ++k) {
 				for (l = 0; l < BRANCHING_OUT_FACTOR; ++l) {
 					unsigned int test_dir[] = {i, j, k, l};
@@ -118,6 +123,7 @@ err_out:
 }
 
 struct bench_operations n_path_rsl_ops = {
+	.parallel_pre_work = 1,
 	.pre_work  = pre_work, 
 	.main_work = main_work,
 };

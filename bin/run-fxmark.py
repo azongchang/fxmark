@@ -8,6 +8,7 @@ import signal
 import subprocess
 import datetime
 import tempfile
+import time
 import pdb
 from os.path import join
 from perfmon import PerfMon
@@ -63,6 +64,9 @@ class Runner(object):
         self.DISK_SIZE     = str(disk_size) if disk_size else ""
         self.DURATION = duration  # seconds
         self.CASE_TIMEOUT = case_timeout
+        self.parallel_init = os.environ.get("FXMARK_PARALLEL_INIT", "1")
+        if self.parallel_init not in ("0", "1"):
+            raise ValueError("FXMARK_PARALLEL_INIT must be 0 or 1")
         self.DIRECTIOS     = ["bufferedio", "directio"]  # enable directio except tmpfs -> nodirectio 
         self.MEDIA_TYPES = ["ssd", "hdd", "nvme", "mem"]
         self.FS_TYPES = [
@@ -218,6 +222,7 @@ class Runner(object):
                 self.log(l.decode("utf-8").strip())
         self.log("### DISK_SIZE      = %s"   % (self.DISK_SIZE if self.DISK_SIZE else "unlimited"))
         self.log("### DURATION       = %ss"  % self.DURATION)
+        self.log("### PARALLEL_INIT  = %s" % self.parallel_init)
         self.log("### DIRECTIO       = %s"   % ','.join(self.DIRECTIOS))
         self.log("### MEDIA_TYPES    = %s"   % ','.join(self.MEDIA_TYPES))
         self.log("### FS_TYPES       = %s"   % ','.join(self.FS_TYPES))
@@ -265,8 +270,17 @@ class Runner(object):
     def exec_cmd(self, cmd, out=None, bind=False, timeout=None):
         if bind:
             cmd = self.bind_cmd(cmd)
-        p = subprocess.Popen(cmd, shell=True, stdout=out, stderr=out,
-                             start_new_session=True)
+        # Concurrent initializers can emit more than a pipe buffer of errors.
+        # Spool output while waiting; an undrained PIPE can stall the children.
+        capture = tempfile.TemporaryFile() if out == subprocess.PIPE else None
+        sink = capture if capture is not None else out
+        try:
+            p = subprocess.Popen(cmd, shell=True, stdout=sink, stderr=sink,
+                                 start_new_session=True)
+        except BaseException:
+            if capture is not None:
+                capture.close()
+            raise
         try:
             p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -283,6 +297,9 @@ class Runner(object):
                 except ProcessLookupError:
                     pass
                 p.wait()
+        if capture is not None:
+            capture.seek(0)
+            p.stdout = capture
         return p
 
     def keep_sudo(self):
@@ -597,7 +614,8 @@ class Runner(object):
                                 yield(media, fs, bench, ncore, dio)
 
     def fxmark_env(self):
-        env = ' '.join(["PERFMON_LEVEL=%s" % self.PERFMON_LEVEL,
+        env = ' '.join(["FXMARK_PARALLEL_INIT=%s" % self.parallel_init,
+                        "PERFMON_LEVEL=%s" % self.PERFMON_LEVEL,
                         "PERFMON_LDIR=%s"  % self.log_dir,
                         "PERFMON_LFILE=%s" % self.perfmon_log])
         return env
@@ -634,8 +652,8 @@ class Runner(object):
                         "--duration", str(self.DURATION),
                         "--directio", directio,
                         "--root", self.test_root,
-                        "--profbegin", "\"%s\"" % self.perfmon_start,
-                        "--profend",   "\"%s\"" % self.perfmon_stop,
+                        "--profbegin", "\"%s\"" % (self.perfmon_start if self.PERFMON_LEVEL != -1 else ""),
+                        "--profend",   "\"%s\"" % (self.perfmon_stop if self.PERFMON_LEVEL != -1 else ""),
                         "--proflog", self.perfmon_log])
         fxmark_timeout = self.CASE_TIMEOUT
         if fxmark_timeout is None:
@@ -651,7 +669,8 @@ class Runner(object):
     def fxmark_cleanup(self):
         cmd = ' '.join([self.fxmark_env(),
                         "%s; rm -f %s/*.pm" % (self.perfmon_stop, self.log_dir)])
-        self.exec_cmd(cmd)
+        if self.PERFMON_LEVEL != -1:
+            self.exec_cmd(cmd)
         self.exec_cmd("sudo sh -c \"echo 0 >/proc/sys/kernel/lock_stat\"",
                       self.dev_null)
 
@@ -683,6 +702,7 @@ class Runner(object):
                             self.log("## %s:%s:%s:%s:%s" % (media, log_fs, bench, nfg, dio))
                             continue
 
+                        phase_start = time.monotonic()
                         self.prepre_work(ncore)
                         if not self.mount(media, fs, self.test_root):
                             self.log("# Fail to mount %s on %s." % (fs, media))
@@ -690,8 +710,17 @@ class Runner(object):
                             continue
                         self.log("## %s:%s:%s:%s:%s" % (media, log_fs, bench, nfg, dio))
                         self.pre_work()
+                        ready_at = time.monotonic()
                         self.fxmark(media, fs, bench, ncore, nfg, nbg, dio)
+                        run_end = time.monotonic()
                         self.post_work()
+                        # Finish real teardown before reporting this case or
+                        # formatting the next one; never overlap on one device.
+                        if not self.umount(self.test_root):
+                            break
+                        self.log("# PHASE setup=%.6f init_run=%.6f teardown=%.6f" % (
+                            ready_at - phase_start, run_end - ready_at,
+                            time.monotonic() - run_end))
                     totol += (cnt + 1)
                     self.log("### NUM_TEST_CONF  = %d" % totol)
                 finally:
