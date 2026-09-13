@@ -78,5 +78,19 @@ class PrepareTests(unittest.TestCase):
                                 for k in range(8) for l in range(8) for m in range(8)}
                     self.assertEqual(files, expected)
 
+    def test_disjoint_preparation_workloads(self):
+        # These workloads either use private directories or embed worker id in
+        # every filename. Parallel init must complete a timed measurement.
+        for bench in ("MWUM", "MRDL", "MRDM"):
+            for parallel in ("0", "1"):
+                with tempfile.TemporaryDirectory(prefix="fxmark-disjoint-") as tmp:
+                    result = subprocess.run(
+                        [str(ROOT / "bin/fxmark"), "--type", bench,
+                         "--ncore", "4", "--nbg", "0", "--duration", "1",
+                         "--directio", "0", "--root", tmp],
+                        env={**os.environ, "FXMARK_PARALLEL_INIT": parallel},
+                        timeout=30, check=True, capture_output=True, text=True)
+                    self.assertNotIn("# ERROR", result.stdout + result.stderr)
+
 if __name__ == "__main__":
     unittest.main()

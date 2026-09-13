@@ -101,6 +101,8 @@ err_out:
 }
 
 struct bench_operations n_shdir_rd_ops = {
+	/* Names include worker id, so concurrent preparation only shares mkdir_p(). */
+	.parallel_pre_work = 1,
 	.pre_work  = pre_work, 
 	.main_work = main_work,
 };

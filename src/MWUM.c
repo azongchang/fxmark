@@ -86,6 +86,7 @@ err_out:
 }
 
 struct bench_operations u_sh_file_rm_ops = {
+	.parallel_pre_work = 1,
 	.pre_work = pre_work,
 	.main_work = main_work,
 };

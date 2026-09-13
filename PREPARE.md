@@ -6,11 +6,13 @@ preparation schedule. Direct `bin/fxmark` calls remain serial unless opted in.
 
 Enabled workloads:
 
-- MWUL and MWRM: separate per-worker directories and files.
+- MWUL, MWUM and MWRM: filenames include worker identity; MWUL/MWRM also
+  use separate worker directories.
 - DWTL: separate per-worker files; the existing 4 GiB per-worker cap remains.
 - MRPM and MRPH: partition the 64 depth-two subtrees among worker indexes;
   the final 32,768-file namespace is unchanged, including at nonidentity CPU
   mappings and when some workers receive no subtree.
+- MRDL uses private directories; MRDM names shared-directory files by worker.
 
 Other workloads, including shared-file and background-worker variants, retain
 their existing initialization schedule. Each parallel initializer runs in its
