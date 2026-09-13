@@ -196,6 +196,7 @@ class Runner(object):
         self.active_cpuset = None
         self.ssrfs_enabled = False
         self.failures = 0
+        self.teardown_failed = False
 
     def log_start(self):
         log_subdir = getattr(Runner, "LOG_SUBDIR", None)
@@ -332,6 +333,19 @@ class Runner(object):
                       self.dev_null)
 
     def umount(self, where):
+        def complete_umount():
+            self.active_dev_path = None
+            (umount_hook, self.umount_hook) = (self.umount_hook, [])
+            for hook in umount_hook:
+                hook()
+            return True
+
+        # An unmounted target is already in the required state.  In
+        # particular, do not turn the initial pre-case unmount into a false
+        # failure just because umount(8) returns EINVAL for a plain directory.
+        if not self.active_dev_path and not os.path.ismount(where):
+            return True
+
         if self.active_dev_path:
             script = os.path.join(SSRFS_ROOT_DIR, "utils", "scripts", "unmount.sh")
             if os.path.exists(script):
@@ -342,29 +356,29 @@ class Runner(object):
                 ])
                 p = self.exec_cmd(cmd, self.dev_null)
                 if p.returncode == 0:
-                    self.active_dev_path = None
-                    return
+                    return complete_umount()
         # Prefer a blocking umount so the filesystem fully tears down
         # (including SSRFS flush-on-teardown) before the next case
         # mkfs's the same device.  Bounded by timeout in case a dead
         # filesystem wedges the mount.
         p = self.exec_cmd("sudo timeout 60 umount " + where, self.dev_null)
         if p.returncode == 0:
-            self.active_dev_path = None
-            (umount_hook, self.umount_hook) = (self.umount_hook, [])
-            for hook in umount_hook:
-                hook()
-            return
-        # Lazy unmount fallback — detaches the filesystem immediately
-        # without killing any processes.  fuser -km here would send
-        # SIGKILL to every process with a file open on this filesystem,
-        # which can include PID 1 (init) if the mount propagated to a
-        # namespace.
-        self.exec_cmd("sudo umount -l " + where, self.dev_null)
-        self.active_dev_path = None
-        (umount_hook, self.umount_hook) = (self.umount_hook, [])
-        for hook in umount_hook:
-            hook()
+            return complete_umount()
+        # A concurrent successful unmount may race the command above.
+        if not os.path.ismount(where):
+            return complete_umount()
+
+        # Never lazily detach a test filesystem.  A lazy unmount can leave
+        # SSRFS persistence work alive while the next case formats the same
+        # device, which masks teardown bugs and risks corrupting the result.
+        self.teardown_failed = True
+        self.failures += 1
+        message = "# umount failed; refusing lazy detach: %s" % where
+        if hasattr(self, "log_fd") and not self.log_fd.closed:
+            self.log(message)
+        else:
+            print(message, file=sys.stderr)
+        return False
 
     def init_mem_disk(self):
         # Prefer the harness-provided memory disk: env.sh attaches a
@@ -521,7 +535,8 @@ class Runner(object):
         if not mount_fn:
             return False;
 
-        self.umount(mnt_path)
+        if not self.umount(mnt_path):
+            return False
         self.exec_cmd("mkdir -p " + mnt_path, self.dev_null)
         if media != "mem" and fs in ("ext4_no_jnl", "f2fs", "xfs", "xfs_no_jnl"):
             (rc, dev_path) = self.init_media(media)
