@@ -76,28 +76,34 @@ static int main_work(struct worker *worker)
 	struct bench *bench = worker->bench;
 	char dir_path[PATH_MAX];
 	DIR *dir;
-	struct dirent entry;
-	struct dirent *result;
+	struct dirent *entry;
 	uint64_t iter = 0;
 	int rc = 0;
 
 	set_test_root(worker, dir_path);
 	while (!bench->stop) {
 		dir = opendir(dir_path);
-		if (!dir) goto err_out;
-		for (; !bench->stop; ++iter) {
-			rc = readdir_r(dir, &entry, &result);
-			if (rc) goto err_out;
+		if (!dir) {
+			rc = errno;
+			break;
 		}
-		closedir(dir);
+		while (!bench->stop) {
+			errno = 0;
+			entry = readdir(dir);
+			if (!entry) {
+				rc = errno;
+				break;
+			}
+			++iter;
+		}
+		if (closedir(dir) && !rc)
+			rc = errno;
+		if (rc)
+			break;
 	}
-out:
 	bench->stop = 1;
 	worker->works = (double)iter;
 	return rc;
-err_out:
-	rc = errno;
-	goto out;
 }
 
 struct bench_operations n_shdir_rd_ops = {
