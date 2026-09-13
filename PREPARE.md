@@ -29,7 +29,7 @@ Case logs record setup, init+run, and strict teardown elapsed seconds, plus
 parallel init duration and the prepared private[0] counters (file/page counts
 for MWUL/MWRM/DWTL; not a universal size metric).
 
-Measurement duration, main_work implementations, sync/drop-cache policy,
+The preparation optimization preserves measurement duration, sync/drop-cache policy,
 format options, and blocking unmount remain unchanged. Cases sharing the same
 device never overlap. Flush and unmount must complete before the next format;
 reducing their genuine persistence work requires a separately validated kernel
@@ -46,3 +46,10 @@ introduced by this optimization.
 Validation: `make` then `python3 tests/test-prepare.py` (no root/device needed).
 Tests cover readiness, worker-0/child init errors, fork failure, child crashes,
 reaping, exact tree equivalence, large subprocess output and timeout propagation.
+
+MRDM/MRDL directory enumeration now counts only entries returned by readdir,
+closes and reopens the stream at EOF, and preserves read errors even if close
+also fails. EAGAIN remains a failure, not a skipped entry or successful EOF.
+Earlier versions counted repeated EOF calls; their throughput numbers are not
+comparable to corrected results. Run `python3 tests/test-readdir.py` for the
+deterministic EOF, count, error-propagation and stream-cleanup regression.
