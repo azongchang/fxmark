@@ -55,6 +55,10 @@ struct worker {
 	volatile uint64_t clocks; 
 	volatile uint64_t usecs;
 	volatile double   works;
+	/* Benchmarks whose main_work is bounded by an input list (MWUL: unlink
+	 * every file it prepared) set this when that list is exhausted before
+	 * the duration alarm; a short run is then complete, not truncated. */
+	volatile int work_done;
 
 	uint64_t private[WORKER_MAX_PRIVATE];
 	char *page;		/*private data buffer*/

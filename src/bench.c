@@ -495,7 +495,10 @@ void report_bench(struct bench *bench, FILE *out)
         for (i = 0; i < bench->ncpu; ++i) {
                 struct worker *w = &bench->workers[i];
 
-                if (!w->ret && !w->is_bg && bench->duration &&
+                /* A worker that exhausted its own work is complete even when
+                 * that ends the measured window early; only a worker that
+                 * stopped without finishing and without an error is suspect. */
+                if (!w->ret && !w->is_bg && bench->duration && !w->work_done &&
                     w->usecs < (uint64_t)bench->duration * 900000) {
                         w->ret = ETIMEDOUT;
                         fprintf(out, "# INVALID worker=%d usecs=%llu requested_secs=%u\n",
