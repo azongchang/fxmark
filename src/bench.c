@@ -22,9 +22,9 @@ static struct bench *running_bench;
 
 static uint64_t usec(void)
 {
-        struct timeval tv;
-        gettimeofday(&tv, 0);
-        return (uint64_t)tv.tv_sec * 1000000 + tv.tv_usec;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return (uint64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
 
 static uint64_t monotonic_usec(void)
@@ -215,8 +215,8 @@ static void worker_main(void *arg)
 	/* main work */
 	if (bench->ops.main_work) {
 		err = bench->ops.main_work(worker);
-		if (err && err != ENOSPC)
-			goto err_out;
+		if (err)
+			bench->stop = 1;
 	}
 
 	/* end time */
@@ -228,8 +228,11 @@ static void worker_main(void *arg)
 		system(bench->profile_stop_cmd);
 
 	/* post-work */
-	if (bench->ops.post_work)
-		err = bench->ops.post_work(worker);
+	if (bench->ops.post_work) {
+		int cleanup_err = bench->ops.post_work(worker);
+		if (!err)
+			err = cleanup_err;
+	}
 err_out:
 	worker->ret = err;
 	worker->usecs = e_us - s_us;
@@ -487,17 +490,25 @@ void report_bench(struct bench *bench, FILE *out)
         double   total_works = 0.0;
         double   avg_secs;
 	char *profile_name, *profile_data;
-        int i, n_fg_cpu;
+        int i, n_fg_cpu, failed = 0;
 
         for (i = 0; i < bench->ncpu; ++i) {
                 struct worker *w = &bench->workers[i];
 
-                if (!w->ret || w->ret == ENOSPC)
+                if (!w->ret && !w->is_bg && bench->duration &&
+                    w->usecs < (uint64_t)bench->duration * 900000) {
+                        w->ret = ETIMEDOUT;
+                        fprintf(out, "# INVALID worker=%d usecs=%llu requested_secs=%u\n",
+                                i, (unsigned long long)w->usecs, bench->duration);
+                }
+                if (!w->ret)
                         continue;
                 fprintf(out, "# ERROR worker=%d cpu=%d ret=%d (%s)\n",
                         i, w->id, w->ret, strerror(w->ret));
-                return;
+                failed = 1;
         }
+        if (failed)
+                return;
 
         /* if report_bench is overloaded */ 
         if (bench->ops.report_bench) {
@@ -546,7 +557,7 @@ int bench_error(struct bench *bench)
         for (i = 0; i < bench->ncpu; ++i) {
                 struct worker *w = &bench->workers[i];
 
-                if (w->ret && w->ret != ENOSPC)
+                if (w->ret)
                         return w->ret;
         }
         return 0;

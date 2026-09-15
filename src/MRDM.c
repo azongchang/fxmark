@@ -9,13 +9,11 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
-#include <signal.h>
+#include <stdlib.h>
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
 #include "fxmark.h"
 #include "util.h"
-
-static int stop_pre_work;
 
 static void set_test_root(struct worker *worker, char *test_root)
 {
@@ -27,48 +25,48 @@ static void set_test_file(struct worker *worker,
 			  uint64_t file_id, char *test_file)
 {
 	struct fx_opt *fx_opt = fx_opt_worker(worker);
-	sprintf(test_file, "%s/n_shdir_rd-%d-%" PRIu64 ".dat",
-		fx_opt->root, worker->id, file_id);
-}
-
-static void sighandler(int x)
-{
-	stop_pre_work = 1;
+	sprintf(test_file, "%s/n_shdir_rd-%" PRIu64 ".dat",
+		fx_opt->root, file_id);
 }
 
 static int pre_work(struct worker *worker)
 {
 	struct bench *bench = worker->bench;
 	char path[PATH_MAX];
-	int fd, rc = 0;
+	int fd, rc;
+	uint64_t total = 32768, id;
+	unsigned int index = worker - bench->workers;
+	const char *value = getenv("FXMARK_MRDM_FILES");
+	char *end;
 
-	/* perform pre_work for bench->duration */
-	if (signal(SIGALRM, sighandler) == SIG_ERR) {
-		rc = errno;
-		goto err_out;
+	/* Fixed shared directory, independent of worker count and FS speed. */
+	if (value) {
+		if (*value < '0' || *value > '9')
+			return EINVAL;
+		errno = 0;
+		total = strtoull(value, &end, 10);
+		if (errno || *end || !total || total > INT64_MAX)
+			return EINVAL;
 	}
-	alarm(bench->duration);
+	if (!index)
+		printf("# PREPARED_TARGET MRDM files=%" PRIu64 "\n", total);
 
 	/* create private directory */
 	set_test_root(worker, path);
 	rc = mkdir_p(path);
-	if (rc) goto err_out;
+	if (rc) return rc;
 
 	/* create files at the private directory */
-	for (; !stop_pre_work; ++worker->private[0]) {
-		set_test_file(worker, worker->private[0], path);
-		if ((fd = open(path, O_CREAT | O_RDWR, S_IRWXU)) == -1) {
-			if (errno == ENOSPC)
-				goto out;
-			goto err_out;
-		}
-		close(fd);
+	for (id = index; id < total; id += bench->ncpu) {
+		set_test_file(worker, id, path);
+		fd = open(path, O_CREAT | O_EXCL | O_RDWR, S_IRWXU);
+		if (fd == -1)
+			return errno;
+		if (close(fd))
+			return errno;
+		++worker->private[0];
 	}
-out:
-	return rc; 
-err_out:
-	rc = errno;
-	goto out;
+	return 0;
 }
 
 static int main_work(struct worker *worker)
@@ -107,7 +105,7 @@ static int main_work(struct worker *worker)
 }
 
 struct bench_operations n_shdir_rd_ops = {
-	/* Names include worker id, so concurrent preparation only shares mkdir_p(). */
+	/* Each worker prepares a disjoint partition of the fixed name set. */
 	.parallel_pre_work = 1,
 	.pre_work  = pre_work, 
 	.main_work = main_work,

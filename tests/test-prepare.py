@@ -14,6 +14,26 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class PrepareTests(unittest.TestCase):
+    def test_mrdm_fixed_directory(self):
+        for parallel, cores in ((0, 1), (0, 4), (1, 4), (1, 12)):
+            with tempfile.TemporaryDirectory(prefix="fxmark-mrdm-") as tmp:
+                subprocess.run([str(ROOT / "bin/fxmark"), "--type", "MRDM",
+                                "--ncore", str(cores), "--nbg", "0", "--duration", "1",
+                                "--directio", "0", "--root", tmp],
+                               env={**os.environ, "FXMARK_PARALLEL_INIT": str(parallel),
+                                    "FXMARK_MRDM_FILES": "101"},
+                               timeout=15, check=True, stdout=subprocess.DEVNULL)
+                self.assertEqual({p.name for p in Path(tmp).iterdir()},
+                                 {f"n_shdir_rd-{i}.dat" for i in range(101)})
+
+    def test_measurement_validity(self):
+        with tempfile.TemporaryDirectory(prefix="fxmark-validity-") as tmp:
+            exe = str(Path(tmp) / "validity")
+            subprocess.run(["cc", "-D_GNU_SOURCE", "-I" + str(ROOT / "src"),
+                            str(ROOT / "tests/test-validity.c"),
+                            str(ROOT / "src/bench.c"), "-o", exe], check=True)
+            subprocess.run([exe], timeout=10, check=True)
+
     def test_mkdir_errors_and_literal_names(self):
         with tempfile.TemporaryDirectory(prefix="fxmark-mkdir-") as tmp:
             libpath = Path(tmp) / "mkdir.so"
