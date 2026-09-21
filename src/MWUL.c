@@ -20,6 +20,15 @@
 
 static volatile sig_atomic_t stop_pre_work;
 
+/*
+ * Size of the prepared set, per worker. The default report is meaningless for
+ * a filesystem that defers deletion, so MWUL is judged by the time to clear a
+ * *known* set: with a fixed count the clear time is comparable across
+ * filesystems and across a deferral A/B, while the deadline below is only a
+ * backstop. Zero keeps the historical "create until the deadline" behaviour.
+ */
+static uint64_t prepared_target;
+
 static void sighandler(int x)
 {
     stop_pre_work = 1;
@@ -45,6 +54,11 @@ static int pre_work(struct worker *worker)
     int fd, rc = 0;
 
     stop_pre_work = 0;
+    {
+        const char *target = getenv("FXMARK_MWUL_FILES");
+
+        prepared_target = target ? strtoull(target, NULL, 10) : 0;
+    }
     if (signal(SIGALRM, sighandler) == SIG_ERR) {
         rc = errno;
         goto err_out;
@@ -58,6 +72,8 @@ static int pre_work(struct worker *worker)
         goto err_out;
 
     for (; !stop_pre_work; ++worker->private[0]) {
+        if (prepared_target && worker->private[0] >= prepared_target)
+            break;
         set_test_file(worker, worker->private[0], path);
         if ((fd = open(path, O_CREAT | O_RDWR, S_IRWXU)) == -1) {
             if (errno == ENOSPC) {
@@ -102,8 +118,51 @@ static int main_work(struct worker *worker)
     goto out;
 }
 
+/*
+ * Primary metric for MWUL: the time to clear the whole prepared set.
+ *
+ * The default report divides by the average worker window, which says nothing
+ * about a filesystem that defers the deletion: the workers return from their
+ * unlink list early and the remaining work lands in the drain. The standard
+ * line is still printed so existing parsers see the same shape; the runner adds
+ * the materialisation the window left behind (sync + umount) to `clear_secs`
+ * before it turns this into a rate.
+ */
+static void mwul_report_bench(struct bench *bench, FILE *out)
+{
+    uint64_t prepared = 0, unlinked = 0, clear_us = 0, total_us = 0;
+    int i, n_fg = bench->ncpu - bench->nbg;
+    int all_done = 1;
+
+    for (i = 0; i < bench->ncpu; ++i) {
+        struct worker *w = &bench->workers[i];
+
+        if (w->is_bg)
+            continue;
+        prepared += w->private[0];
+        unlinked += (uint64_t)w->works;
+        total_us += w->usecs;
+        if (w->usecs > clear_us)
+            clear_us = w->usecs;
+        if (!w->work_done)
+            all_done = 0;
+    }
+
+    fprintf(out, "# ncpu secs works works/sec \n");
+    fprintf(out, "%d %f %f %f \n", n_fg,
+            n_fg ? (double)total_us / (double)n_fg / 1000000.0 : 0.0,
+            (double)unlinked,
+            total_us ? (double)unlinked * (double)n_fg * 1000000.0 /
+                       (double)total_us : 0.0);
+    fprintf(out,
+            "# MWUL_DRAIN prepared=%llu unlinked=%llu all_done=%d clear_secs=%.6f\n",
+            (unsigned long long)prepared, (unsigned long long)unlinked,
+            all_done, (double)clear_us / 1000000.0);
+}
+
 struct bench_operations u_file_rm_ops = {
     .parallel_pre_work = 1,
     .pre_work  = pre_work,
     .main_work = main_work,
+    .report_bench = mwul_report_bench,
 };
