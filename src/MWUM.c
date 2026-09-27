@@ -78,6 +78,8 @@ static int main_work(struct worker *worker)
 	}
 out:
 	worker->works = (double)iter;
+	if (!rc && iter >= worker->private[0] && !bench->stop)
+		worker->work_done = 1;
 	return rc;
 err_out:
 	bench->stop = 1;

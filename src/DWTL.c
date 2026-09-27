@@ -147,6 +147,8 @@ static int main_work(struct worker *worker)
  out:
     close(fd);
     worker->works = (double)(worker->private[0] - iter);
+    if (!rc && iter == 0 && !bench->stop)
+      worker->work_done = 1;
     return rc;
  err_out:
     bench->stop = 1;
