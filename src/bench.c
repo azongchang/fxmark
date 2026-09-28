@@ -260,6 +260,15 @@ static void run_bench_parallel(struct bench *bench)
 	int i, left = 0, failed = 0;
 	uint64_t begin = monotonic_usec();
 	uint64_t limit = (3ULL * bench->duration + 30) * 1000000;
+	const char *init_limit = getenv("FXMARK_INIT_TIMEOUT_SEC");
+
+	if (init_limit && *init_limit) {
+		char *end;
+		unsigned long long seconds = strtoull(init_limit, &end, 10);
+
+		if (!*end && seconds > 0 && seconds <= 3600)
+			limit = seconds * 1000000;
+	}
 
 	for (i = 0; i < bench->ncpu; i++)
 		children[i] = -1;
